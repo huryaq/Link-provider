@@ -1,4 +1,4 @@
-# +++ Edited By Gojo [telegram username: @DoraShin_hlo]
+# +++ Modified By [telegram username: @Codeflix_Bots
 import os
 import asyncio
 from config import *
