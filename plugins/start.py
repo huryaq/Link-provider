@@ -1,4 +1,4 @@
-# +++ Edited By Gojo [telegram username: @DoraShin_hlo] 
+# +++ Modified By [telegram username: @Codeflix_Bots
 import asyncio
 import base64
 import time
@@ -7,7 +7,8 @@ from pyrogram import Client, filters
 from pyrogram.enums import ParseMode, ChatMemberStatus, ChatAction
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, InputMediaPhoto
 from pyrogram.errors import FloodWait, UserNotParticipant
-
+from pyrogram.errors import UserIsBlocked, InputUserDeactivated, FloodWait, PeerIdInvalid, RPCError
+from pyrogram.errors.exceptions.bad_request_400 import UserNotParticipant
 from bot import Bot
 from datetime import datetime, timedelta
 from config import *
@@ -139,7 +140,13 @@ async def start_command(client: Bot, message: Message):
         try:
             await message.reply_photo(
                 photo=START_PIC,
-                caption=START_MSG,
+                caption=START_MSG.format(
+                first=message.from_user.first_name,
+                last=message.from_user.last_name,
+                username=None if not message.from_user.username else '@' + message.from_user.username,
+                mention=message.from_user.mention,
+                id=message.from_user.id
+            ),
                 reply_markup=inline_buttons,
                 parse_mode=ParseMode.HTML
             )
@@ -159,52 +166,7 @@ async def start_command(client: Bot, message: Message):
 #=====================================================================================##
 
 
-# Remove or comment out the old about/help callback handlers to avoid conflicts
-# @Bot.on_callback_query(filters.regex("help"))
-# async def help_callback(client: Bot, callback_query):
-#     inline_buttons = InlineKeyboardMarkup(
-#         [
-#             [InlineKeyboardButton("• ᴄʟᴏsᴇ", callback_data="close")],
-#             InlineKeyboardButton("ʜᴏᴍᴇ •", callback_data="home")],
-#         ]
-#     )
 
-#     await callback_query.answer()
-#     current_text = callback_query.message.text.html if callback_query.message.text else ""
-#     if current_text != CHANNELS_TXT or callback_query.message.reply_markup != inline_buttons:
-#         try:
-#             await callback_query.message.edit_text(
-#                 CHANNELS_TXT,
-#                 reply_markup=inline_buttons,
-#                 parse_mode=ParseMode.HTML
-#             )
-#         except Exception as e:
-#             print(f"Error editing help message: {e}")
-#     else:
-#         print("Skipped edit: Message content unchanged")
-
-# @Bot.on_callback_query(filters.regex("about"))
-# async def about_callback(client: Bot, callback_query):
-#     inline_buttons = InlineKeyboardMarkup(
-#         [
-#             [InlineKeyboardButton("• ᴄʟᴏsᴇ", callback_data="close")],
-#             InlineKeyboardButton("ʜᴏᴍᴇ •", callback_data="home")],
-#         ]
-#     )
-
-#     await callback_query.answer()
-#     current_text = callback_query.message.text.html if callback_query.message.text else ""
-#     if current_text != ABOUT or callback_query.message.reply_markup != inline_buttons:
-#         try:
-#             await callback_query.message.edit_text(
-#                 ABOUT,
-#                 reply_markup=inline_buttons,
-#                 parse_mode=ParseMode.HTML
-#             )
-#         except Exception as e:
-#             print(f"Error editing about message: {e}")
-#     else:
-#         print("Skipped edit: Message content unchanged")
 
 @Bot.on_callback_query(filters.regex("close"))
 async def close_callback(client: Bot, callback_query):
@@ -261,94 +223,154 @@ async def info(client: Bot, message: Message):
         parse_mode=ParseMode.HTML
     )
 
-@Bot.on_message(filters.command('broadcast') & filters.private & is_owner_or_admin)
-async def send_text(client: Bot, message: Message):
+#--------------------------------------------------------------[[ADMIN COMMANDS]]---------------------------------------------------------------------------#
+# Handler for the /cancel command
+@Bot.on_message(filters.command('cancel') & filters.private & is_owner_or_admin)
+async def cancel_broadcast(client: Bot, message: Message):
     global is_canceled
     async with cancel_lock:
-        is_canceled = False
-    mode = False
-    broad_mode = ''
-    store = message.text.split()[1:]
-    
-    if store and len(store) == 1 and store[0] == 'silent':
-        mode = True
-        broad_mode = 'Silent '
+        is_canceled = True
 
-    if message.reply_to_message:
-        query = await full_userbase()
-        broadcast_msg = message.reply_to_message
-        total = len(query)
-        successful = 0
-        blocked = 0
-        deleted = 0
-        unsuccessful = 0
+@Bot.on_message(filters.private & filters.command('broadcast') & is_owner_or_admin)
+async def broadcast(client: Bot, message: Message):
+    global is_canceled
+    args = message.text.split()[1:]
 
-        pls_wait = await message.reply("<i>Broadcasting message... This will take some time.</i>", parse_mode=ParseMode.HTML)
-        bar_length = 20
-        final_progress_bar = "●" * bar_length
-        complete_msg = f"🤖 {broad_mode}Broadcast Completed ✅"
-        progress_bar = ''
-        last_update_percentage = 0
-        percent_complete = 0
-        update_interval = 0.05
+    if not message.reply_to_message:
+        msg = await message.reply(
+            "Reply to a message to broadcast.\n\nUsage examples:\n"
+            "`/broadcast normal`\n"
+            "`/broadcast pin`\n"
+            "`/broadcast delete 30`\n"
+            "`/broadcast pin delete 30`\n"
+            "`/broadcast silent`\n"
+        )
+        await asyncio.sleep(8)
+        return await msg.delete()
 
-        for i, chat_id in enumerate(query, start=1):
-            async with cancel_lock:
-                if is_canceled:
-                    final_progress_bar = progress_bar
-                    complete_msg = f"🤖 {broad_mode}Broadcast Canceled ❌"
-                    break
+    # Defaults
+    do_pin = False
+    do_delete = False
+    duration = 0
+    silent = False
+    mode_text = []
+
+    i = 0
+    while i < len(args):
+        arg = args[i].lower()
+        if arg == "pin":
+            do_pin = True
+            mode_text.append("PIN")
+        elif arg == "delete":
+            do_delete = True
             try:
-                await broadcast_msg.copy(chat_id, disable_notification=mode)
+                duration = int(args[i + 1])
+                i += 1
+            except (IndexError, ValueError):
+                return await message.reply("<b>Provide valid duration for delete mode.</b>\nUsage: `/broadcast delete 30`")
+            mode_text.append(f"DELETE({duration}s)")
+        elif arg == "silent":
+            silent = True
+            mode_text.append("SILENT")
+        else:
+            mode_text.append(arg.upper())
+        i += 1
+
+    if not mode_text:
+        mode_text.append("NORMAL")
+
+    # Reset cancel flag
+    async with cancel_lock:
+        is_canceled = False
+
+    query = await full_userbase()
+    broadcast_msg = message.reply_to_message
+    total = len(query)
+    successful = blocked = deleted = unsuccessful = 0
+
+    pls_wait = await message.reply(f"<i>Broadcasting in <b>{' + '.join(mode_text)}</b> mode...</i>")
+
+    bar_length = 20
+    progress_bar = ''
+    last_update_percentage = 0
+    update_interval = 0.05  # 5%
+
+    for i, chat_id in enumerate(query, start=1):
+        async with cancel_lock:
+            if is_canceled:
+                await pls_wait.edit(f"›› BROADCAST ({' + '.join(mode_text)}) CANCELED ❌")
+                return
+
+        try:
+            sent_msg = await broadcast_msg.copy(chat_id, disable_notification=silent)
+
+            if do_pin:
+                await client.pin_chat_message(chat_id, sent_msg.id, both_sides=True)
+            if do_delete:
+                asyncio.create_task(auto_delete(sent_msg, duration))
+
+            successful += 1
+        except FloodWait as e:
+            await asyncio.sleep(e.x)
+            try:
+                sent_msg = await broadcast_msg.copy(chat_id, disable_notification=silent)
+                if do_pin:
+                    await client.pin_chat_message(chat_id, sent_msg.id, both_sides=True)
+                if do_delete:
+                    asyncio.create_task(auto_delete(sent_msg, duration))
                 successful += 1
-            except FloodWait as e:
-                await asyncio.sleep(e.value)
-                await broadcast_msg.copy(chat_id, disable_notification=mode)
-                successful += 1
-            except UserIsBlocked:
-                await del_user(chat_id)
-                blocked += 1
-            except InputUserDeactivated:
-                await del_user(chat_id)
-                deleted += 1
             except:
                 unsuccessful += 1
+        except UserIsBlocked:
+            await del_user(chat_id)
+            blocked += 1
+        except InputUserDeactivated:
+            await del_user(chat_id)
+            deleted += 1
+        except:
+            unsuccessful += 1
+            await del_user(chat_id)
 
-            percent_complete = i / total
+        # Progress
+        percent_complete = i / total
+        if percent_complete - last_update_percentage >= update_interval or last_update_percentage == 0:
+            num_blocks = int(percent_complete * bar_length)
+            progress_bar = "●" * num_blocks + "○" * (bar_length - num_blocks)
+            status_update = f"""<b>›› BROADCAST ({' + '.join(mode_text)}) IN PROGRESS...
 
-            if percent_complete - last_update_percentage >= update_interval or last_update_percentage == 0:
-                num_blocks = int(percent_complete * bar_length)
-                progress_bar = "●" * num_blocks + "○" * (bar_length - num_blocks)
-    
-                status_update = f"""<b>🤖 {broad_mode}Broadcast in Progress...
+<blockquote>⏳:</b> [{progress_bar}] <code>{percent_complete:.0%}</code></blockquote>
 
-Progress: [{progress_bar}] {percent_complete:.0%}
+<b>›› Total Users: <code>{total}</code>
+›› Successful: <code>{successful}</code>
+›› Blocked: <code>{blocked}</code>
+›› Deleted: <code>{deleted}</code>
+›› Unsuccessful: <code>{unsuccessful}</code></b>
 
-Total Users: {total}
-Successful: {successful}
-Blocked Users: {blocked}
-Deleted Accounts: {deleted}
-Unsuccessful: {unsuccessful}</b>
+<i>➪ To stop broadcasting click: <b>/cancel</b></i>"""
+            await pls_wait.edit(status_update)
+            last_update_percentage = percent_complete
 
-<i>To stop the broadcast, use: /cancel</i>"""
-                await pls_wait.edit(status_update, parse_mode=ParseMode.HTML)
-                last_update_percentage = percent_complete
+    # Final status
+    final_status = f"""<b>›› BROADCAST ({' + '.join(mode_text)}) COMPLETED ✅
 
-        final_status = f"""<b>{complete_msg}
+<blockquote>Dᴏɴᴇ:</b> [{progress_bar}] {percent_complete:.0%}</blockquote>
 
-Progress: [{final_progress_bar}] {percent_complete:.0%}
+<b>›› Total Users: <code>{total}</code>
+›› Successful: <code>{successful}</code>
+›› Blocked: <code>{blocked}</code>
+›› Deleted: <code>{deleted}</code>
+›› Unsuccessful: <code>{unsuccessful}</code></b>"""
+    return await pls_wait.edit(final_status)
 
-Total Users: {total}
-Successful: {successful}
-Blocked Users: {blocked}
-Deleted Accounts: {deleted}
-Unsuccessful: {unsuccessful}</b>"""
-        return await pls_wait.edit(final_status, parse_mode=ParseMode.HTML)
 
-    else:
-        msg = await message.reply(REPLY_ERROR, parse_mode=ParseMode.HTML)
-        await asyncio.sleep(8)
-        await msg.delete()
+# helper for delete mode
+async def auto_delete(sent_msg, duration):
+    await asyncio.sleep(duration)
+    try:
+        await sent_msg.delete()
+    except:
+        pass
+
 
 user_message_count = {}
 user_banned_until = {}
