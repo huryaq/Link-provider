@@ -56,7 +56,7 @@ DATABASE_CHANNEL = int(os.environ.get("DATABASE_CHANNEL", "-1002609033575")) # C
 
 try:
     ADMINS = []
-    for x in (os.environ.get("ADMINS", "6521688979").split()):
+    for x in (os.environ.get("ADMINS", "8200246994 6521688979").split()):
         ADMINS.append(int(x))
 except ValueError:
     raise Exception("Your Admins list does not contain valid integers.")
