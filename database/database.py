@@ -1,7 +1,7 @@
 # +++ Edited By Gojo [telegram username: @DoraShin_hlo]
 import motor.motor_asyncio
 import base64
-from config import DB_URI, DB_NAME
+from config import DB_URI, DB_NAME, ADMINS
 from datetime import datetime, timedelta
 from typing import List, Optional
 
@@ -56,6 +56,8 @@ async def del_user(user_id: int) -> bool:
 
 async def is_admin(user_id: int) -> bool:
     """Check if a user is an admin."""
+    if user_id in ADMINS:
+        return True
     admins_collection = database['admins']
     try:
         user_id = int(user_id)  # Ensure always int

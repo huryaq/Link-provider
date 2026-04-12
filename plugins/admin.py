@@ -350,5 +350,3 @@ async def paginate_channel_ids(client, callback_query):
     page = int(callback_query.data.split("_")[1])
     channels = await get_channels()
     await send_channel_ids_page(client, callback_query.message, channels, page, edit=True)
-    text = "<b>Admin User IDs:</b>\n" + "\n".join([f"<code>{uid}</code>" for uid in admins])
-    await message.reply_text(text)
