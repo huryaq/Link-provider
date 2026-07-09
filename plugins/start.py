@@ -212,13 +212,13 @@ async def info(client: Bot, message: Message):
     
     ping_time = (end_time - start_time) * 1000
     
-    users = await full_userbase()
+    total_users = await total_users_count()
     now = datetime.now()
     delta = now - client.uptime
     bottime = get_readable_time(delta.seconds)
     
     await temp_msg.edit(
-        f"<b>Users: {len(users)}\n\nUptime: {bottime}\n\nPing: {ping_time:.2f} ms</b>",
+        f"<b>Users: {total_users}\n\nUptime: {bottime}\n\nPing: {ping_time:.2f} ms</b>",
         reply_markup=reply_markup,
         parse_mode=ParseMode.HTML
     )

@@ -20,12 +20,12 @@ async def add_user(user_id: int) -> bool:
         return False
     
     try:
-        existing_user = await user_data.find_one({'_id': user_id})
-        if existing_user:
-            return False
-        
-        await user_data.insert_one({'_id': user_id, 'created_at': datetime.utcnow()})
-        return True
+        result = await user_data.update_one(
+            {'_id': user_id},
+            {'$setOnInsert': {'created_at': datetime.utcnow()}},
+            upsert=True
+        )
+        return result.upserted_id is not None
     except Exception as e:
         print(f"Error adding user {user_id}: {e}")
         return False
@@ -34,12 +34,20 @@ async def present_user(user_id: int) -> bool:
     """Check if a user exists in the database."""
     if not isinstance(user_id, int):
         return False
-    return bool(await user_data.find_one({'_id': user_id}))
+    return bool(await user_data.find_one({'_id': user_id}, projection={'_id': 1}))
+
+async def total_users_count() -> int:
+    """Get the total count of users in the database."""
+    try:
+        return await user_data.count_documents({})
+    except Exception as e:
+        print(f"Error counting users: {e}")
+        return 0
 
 async def full_userbase() -> List[int]:
     """Get all user IDs from the database."""
     try:
-        user_docs = user_data.find()
+        user_docs = user_data.find({}, projection={'_id': 1})
         return [doc['_id'] async for doc in user_docs]
     except Exception as e:
         print(f"Error fetching userbase: {e}")
