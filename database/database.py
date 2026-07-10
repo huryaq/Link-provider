@@ -3,7 +3,7 @@ import motor.motor_asyncio
 import base64
 from config import DB_URI, DB_NAME, ADMINS
 from datetime import datetime, timedelta
-from typing import List, Optional
+from typing import List, Optional, Union
 
 dbclient = motor.motor_asyncio.AsyncIOMotorClient(DB_URI)
 database = dbclient[DB_NAME]
@@ -13,8 +13,15 @@ user_data = database['users']
 channels_collection = database['channels']
 fsub_channels_collection = database['fsub_channels']
 
+# --- CACHE VARIABLES FOR MEMORY ---
+_cached_user_count = 0
+_last_count_update = None
+_cache_expiry_seconds = 300  # 5 minutes tak memory me rakhega
+
 async def add_user(user_id: int) -> bool:
-    """Add a user to the database if they don't exist."""
+    """Add a user to the database if they don't exist and instantly update cache."""
+    global _cached_user_count  # Memory wale count ko yahan bula liya
+    
     if not isinstance(user_id, int) or user_id <= 0:
         print(f"Invalid user_id: {user_id}")
         return False
@@ -25,7 +32,15 @@ async def add_user(user_id: int) -> bool:
             {'$setOnInsert': {'created_at': datetime.utcnow()}},
             upsert=True
         )
-        return result.upserted_id is not None
+        
+        # Agar naya user sach me add hua hai (pehle se nahi tha)
+        if result.upserted_id is not None:
+            # Memory me count instantly badha do!
+            if isinstance(_cached_user_count, int) and _cached_user_count > 0:
+                _cached_user_count += 1 
+            return True
+            
+        return False
     except Exception as e:
         print(f"Error adding user {user_id}: {e}")
         return False
@@ -36,13 +51,28 @@ async def present_user(user_id: int) -> bool:
         return False
     return bool(await user_data.find_one({'_id': user_id}, projection={'_id': 1}))
 
-async def total_users_count() -> int:
-    """Get the total count of users in the database."""
+async def total_users_count() -> Union[int, str]:
+    """Get the total count of users using MEMORY CACHE to avoid 0 drops on high ping."""
+    global _cached_user_count, _last_count_update
+    
+    now = datetime.utcnow()
+    
+    # Agar memory me count hai aur 5 minute nahi hue hain, toh directly memory se bhejo (Super Fast)
+    if _last_count_update and (now - _last_count_update).total_seconds() < _cache_expiry_seconds:
+        return _cached_user_count
+        
     try:
-        return await user_data.count_documents({})
+        # Naya data fetch karne ki koshish karo
+        count = await user_data.count_documents({})
+        _cached_user_count = count  # Memory update kar do
+        _last_count_update = now
+        return count
     except Exception as e:
-        print(f"Error counting users: {e}")
-        return 0
+        print(f"Error counting users (Network timeout/Ping high): {e}")
+        # Agar ping ki wajah se DB connection fail ho jaye, toh 0 dikhane ke bajaye memory wala last count bhejo!
+        if _cached_user_count > 0:
+            return _cached_user_count 
+        return "Checking..." # Bot restart ke turant baad agar ping high ho
 
 async def full_userbase() -> List[int]:
     """Get all user IDs from the database."""
