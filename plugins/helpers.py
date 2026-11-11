@@ -1,4 +1,6 @@
+import asyncio
 import random
+import time
 import unicodedata
 import aiohttp
 from config import TG_BOT_TOKEN
@@ -26,14 +28,13 @@ IMAGES = [
 def get_preview() -> str:
     return ""
 
-# ─── UNICODE & SMALL-CAPS FONT NORMALIZER FOR /get SEARCH ──────────────
+# ─── ULTRA-FAST UNICODE & SMALL-CAPS NORMALIZER ────────────────────────
 _SMALL_CAPS_MAP = str.maketrans(
     "ᴀʙᴄᴅᴇꜰɢʜɪᴊᴋʟᴍɴᴏᴘǫʀsꜱᴛᴜᴠᴡxʏᴢ",
     "abcdefghijklmnopqrstuvwxyz"
 )
 
 def normalize_text(text: str) -> str:
-    """Converts any fancy/bold/small-caps Telegram title into plain lowercase ASCII for accurate search"""
     if not text:
         return ""
     text = text.translate(_SMALL_CAPS_MAP)
@@ -66,34 +67,70 @@ def serialize_markup(markup: InlineKeyboardMarkup) -> dict:
             keyboard.append(row_list)
     return {"inline_keyboard": keyboard}
 
-# ─── DIRECT TELEGRAM BOT API ENGINE (SUPPORTS COLORED BUTTONS & TOP PREVIEW)
+# ─── HIGH-CONCURRENCY HTTP POOL & INACTIVITY AUTO-DELETE TRACKER ───────
 _http_session = None
+_LAST_ACTIVE = {}       # (chat_id, bot_msg_id) -> monotonic timestamp
+_LINKED_USER_MSG = {}   # (chat_id, bot_msg_id) -> user_cmd_msg_id
 
 async def get_http_session() -> aiohttp.ClientSession:
     global _http_session
     if _http_session is None or _http_session.closed:
-        _http_session = aiohttp.ClientSession()
+        connector = aiohttp.TCPConnector(limit=150, ttl_dns_cache=600, keepalive_timeout=60)
+        timeout = aiohttp.ClientTimeout(total=10)
+        _http_session = aiohttp.ClientSession(connector=connector, timeout=timeout)
     return _http_session
+
+async def api_delete_msg(chat_id: int, message_id: int):
+    if not chat_id or not message_id:
+        return
+    session = await get_http_session()
+    url = f"https://api.telegram.org/bot{TG_BOT_TOKEN}/deleteMessage"
+    try:
+        async with session.post(url, json={"chat_id": chat_id, "message_id": message_id}) as resp:
+            await resp.read()
+    except Exception:
+        pass
+
+async def delete_bot_and_user_msg(chat_id: int, bot_msg_id: int, fallback_user_msg_id: int = None):
+    key = (chat_id, bot_msg_id)
+    _LAST_ACTIVE.pop(key, None)
+    user_msg_id = _LINKED_USER_MSG.pop(key, None) or fallback_user_msg_id
+    await api_delete_msg(chat_id, bot_msg_id)
+    if user_msg_id:
+        await api_delete_msg(chat_id, user_msg_id)
+
+async def _inactivity_watcher(chat_id: int, bot_msg_id: int, timeout_sec: int):
+    key = (chat_id, bot_msg_id)
+    while True:
+        last_t = _LAST_ACTIVE.get(key)
+        if last_t is None:
+            return
+        elapsed = time.monotonic() - last_t
+        if elapsed >= timeout_sec:
+            await delete_bot_and_user_msg(chat_id, bot_msg_id)
+            return
+        await asyncio.sleep(max(1.0, timeout_sec - elapsed))
 
 class _ChatRef:
     def __init__(self, chat_id: int):
         self.id = chat_id
 
 class BotApiMessage:
-    def __init__(self, chat_id: int, message_id: int):
+    def __init__(self, chat_id: int, message_id: int, user_msg_id: int = None):
         self.chat = _ChatRef(chat_id)
         self.id = message_id
+        self.user_msg_id = user_msg_id
 
     async def delete(self):
-        session = await get_http_session()
-        url = f"https://api.telegram.org/bot{TG_BOT_TOKEN}/deleteMessage"
-        try:
-            async with session.post(url, json={"chat_id": self.chat.id, "message_id": self.id}) as resp:
-                await resp.read()
-        except Exception:
-            pass
+        await delete_bot_and_user_msg(self.chat.id, self.id, self.user_msg_id)
 
-async def send_ui(chat_id: int, text: str, reply_markup: InlineKeyboardMarkup = None, reply_to_message_id: int = None):
+async def send_ui(
+    chat_id: int,
+    text: str,
+    reply_markup: InlineKeyboardMarkup = None,
+    reply_to_message_id: int = None,
+    auto_delete_sec: int = 180
+):
     session = await get_http_session()
     api_url = f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendMessage"
     img_url = random.choice(IMAGES)
@@ -121,19 +158,33 @@ async def send_ui(chat_id: int, text: str, reply_markup: InlineKeyboardMarkup = 
         async with session.post(api_url, json=payload) as resp:
             data = await resp.json()
             if data.get("ok"):
-                return BotApiMessage(chat_id, data["result"]["message_id"])
-            else:
-                print(f"BotAPI sendMessage warning: {data}")
+                bot_msg_id = data["result"]["message_id"]
+                key = (chat_id, bot_msg_id)
+                _LAST_ACTIVE[key] = time.monotonic()
+                if reply_to_message_id:
+                    _LINKED_USER_MSG[key] = reply_to_message_id
+                if auto_delete_sec and auto_delete_sec > 0:
+                    asyncio.create_task(_inactivity_watcher(chat_id, bot_msg_id, auto_delete_sec))
+                return BotApiMessage(chat_id, bot_msg_id, reply_to_message_id)
     except Exception as e:
         print(f"BotAPI sendMessage exception: {e}")
     return None
 
-async def reply_ui(message, text: str, reply_markup: InlineKeyboardMarkup = None):
+async def reply_ui(message, text: str, reply_markup: InlineKeyboardMarkup = None, auto_delete_sec: int = 180):
     chat_id = message.chat.id
     reply_id = None
     if getattr(message, "from_user", None) and not getattr(message.from_user, "is_self", False):
         reply_id = message.id
-    res = await send_ui(chat_id, text, reply_markup=reply_markup, reply_to_message_id=reply_id)
+    elif getattr(message, "reply_to_message", None):
+        reply_id = message.reply_to_message.id
+
+    res = await send_ui(
+        chat_id,
+        text,
+        reply_markup=reply_markup,
+        reply_to_message_id=reply_id,
+        auto_delete_sec=auto_delete_sec
+    )
     if res:
         return res
     return await message.reply_text(text, reply_markup=reply_markup)
@@ -143,9 +194,22 @@ async def edit_ui(message, text: str, reply_markup: InlineKeyboardMarkup = None)
     api_url = f"https://api.telegram.org/bot{TG_BOT_TOKEN}/editMessageText"
     img_url = random.choice(IMAGES)
 
+    chat_id = message.chat.id
+    msg_id = message.id
+    key = (chat_id, msg_id)
+
+    # Refresh inactivity timer on button click!
+    if key in _LAST_ACTIVE:
+        _LAST_ACTIVE[key] = time.monotonic()
+    else:
+        _LAST_ACTIVE[key] = time.monotonic()
+        if getattr(message, "reply_to_message", None):
+            _LINKED_USER_MSG[key] = message.reply_to_message.id
+        asyncio.create_task(_inactivity_watcher(chat_id, msg_id, 180))
+
     payload = {
-        "chat_id": message.chat.id,
-        "message_id": message.id,
+        "chat_id": chat_id,
+        "message_id": msg_id,
         "text": text,
         "parse_mode": "HTML",
         "link_preview_options": {
@@ -162,14 +226,12 @@ async def edit_ui(message, text: str, reply_markup: InlineKeyboardMarkup = None)
         async with session.post(api_url, json=payload) as resp:
             data = await resp.json()
             if data.get("ok"):
-                return BotApiMessage(message.chat.id, message.id)
-            else:
-                print(f"BotAPI editMessageText warning: {data}")
+                return BotApiMessage(chat_id, msg_id, _LINKED_USER_MSG.get(key))
     except Exception as e:
         print(f"BotAPI editMessageText exception: {e}")
     return None
 
-# ─── UI MESSAGE TEMPLATES (VIDEO STYLE DOUBLE QUOTE BLOCKS) ────────────
+# ─── UI MESSAGE TEMPLATES ──────────────────────────────────────────────
 def get_start_text() -> str:
     return (
         f"<blockquote><b>➲ 𝗪𝗘𝗟𝗖𝗢𝗠𝗘 𝗧𝗢 𝗟𝗜𝗡𝗞𝗦𝗛𝗔𝗥𝗘</b></blockquote>\n"
@@ -188,15 +250,15 @@ def get_help_text() -> str:
     return (
         f"<blockquote><b>➲ 𝗟𝗜𝗡𝗞𝗦𝗛𝗔𝗥𝗘 𝗤𝗨𝗜𝗖𝗞 𝗚𝗨𝗜𝗗𝗘</b></blockquote>\n"
         f"<blockquote>◍ /start — ᴏᴘᴇɴ ʟɪɴᴋsʜᴀʀᴇ\n"
-        f"◍ /get &lt;ᴛɪᴛʟᴇ&gt; — ғɪɴᴅ ᴀ ᴄʜᴀɴɴᴇʟ ʙʏ ɴᴀᴍᴇ\n"
+        f"◍ /get &lt;ᴛɪᴛʟᴇ&gt; — ғɪɴᴅ ᴀ ᴄʜᴀɴɴᴇʟ\n"
         f"◍ ᴏᴘᴇɴ ᴀ sʜᴀʀᴇᴅ ʟɪɴᴋ ᴛᴏ ʀᴇᴄᴇɪᴠᴇ ᴀ ᴛᴇᴍᴘᴏʀᴀʀʏ ɪɴᴠɪᴛᴇ.</blockquote>"
     )
 
 def get_directory_text() -> str:
     return (
         f"<blockquote><b>➲ 𝗖𝗛𝗔𝗡𝗡𝗘𝗟 𝗗𝗜𝗥𝗘𝗖𝗧𝗢𝗥𝗬 🔎</b></blockquote>\n"
-        f"<blockquote>◍ sᴇᴀʀᴄʜ ᴀɴʏ ᴄʜᴀɴɴᴇʟ ʙʏ ɴᴀᴍᴇ ᴛᴏ ɢᴇᴛ ᴀ ᴛᴇᴍᴘᴏʀᴀʀʏ ɪɴᴠɪᴛᴇ ʟɪɴᴋ.\n"
-        f"◍ ᴄʟɪᴄᴋ <b>sᴇᴀʀᴄʜ ᴄʜᴀɴɴᴇʟ</b> ʙᴇʟᴏᴡ ᴏʀ ᴜsᴇ <code>/get &lt;ɴᴀᴍᴇ&gt;</code>.</blockquote>"
+        f"<blockquote>◍ ᴜsᴇ <code>/get &lt;ᴛɪᴛʟᴇ&gt;</code> ᴛᴏ ғɪɴᴅ ᴀɴʏ ᴄʜᴀɴɴᴇʟ ʙʏ ɴᴀᴍᴇ.\n"
+        f"◍ ᴇxᴀᴍᴘʟᴇ: <code>/get naruto</code></blockquote>"
     )
 
 def get_fsub_text() -> str:
@@ -215,24 +277,24 @@ def get_leave_text(channel_title: str) -> str:
         f"◍ ᴘʟᴇᴀsᴇ ʀᴇᴊᴏɪɴ ᴛᴏ ᴋᴇᴇᴘ ʏᴏᴜʀ ᴀᴄᴄᴇss ᴛᴏ ᴏᴜʀ ʟɪɴᴋs ᴀɴᴅ ғɪʟᴇs ᴀᴄᴛɪᴠᴇ.</blockquote>"
     )
 
-# ─── AUTO COMMANDS REGISTRATION ON VPS STARTUP ─────────────────────────
+# ─── AUTO COMMANDS (SMALL CAPS & /get AT THE VERY BOTTOM) ──────────────
 async def setup_bot_commands(client):
     commands = [
-        BotCommand("start", "Open LinkShare"),
-        BotCommand("get", "Search a channel by name"),
-        BotCommand("add_fsub", "Add Force Subscribe channel (Admin)"),
-        BotCommand("del_fsub", "Remove Force Subscribe channel (Admin)"),
-        BotCommand("fsub_chnl", "View FSub channels list (Admin)"),
-        BotCommand("req", "Toggle Request/Direct mode (Admin)"),
-        BotCommand("addch", "Add a channel to database (Admin)"),
-        BotCommand("delch", "Delete a channel from database (Admin)"),
-        BotCommand("links", "View all channel links (Admin)"),
-        BotCommand("genlink", "Generate protected link (Admin)"),
-        BotCommand("add_admin", "Add a new admin (Owner)"),
-        BotCommand("remove_admin", "Remove an admin (Owner)"),
-        BotCommand("list_admin", "View all admins (Admin)"),
-        BotCommand("status", "Check bot ping, uptime & users (Admin)"),
-        BotCommand("broadcast", "Broadcast message to users (Admin)"),
+        BotCommand("start", "ᴏᴘᴇɴ ʟɪɴᴋsʜᴀʀᴇ"),
+        BotCommand("add_fsub", "ᴀᴅᴅ ғsᴜʙ ᴄʜᴀɴɴᴇʟ"),
+        BotCommand("del_fsub", "ʀᴇᴍᴏᴠᴇ ғsᴜʙ ᴄʜᴀɴɴᴇʟ"),
+        BotCommand("fsub_chnl", "ᴠɪᴇᴡ ғsᴜʙ ʟɪsᴛ"),
+        BotCommand("req", "ᴛᴏɢɢʟᴇ ғsᴜʙ ᴍᴏᴅᴇ"),
+        BotCommand("addch", "ᴀᴅᴅ ᴄʜᴀɴɴᴇʟ"),
+        BotCommand("delch", "ʀᴇᴍᴏᴠᴇ ᴄʜᴀɴɴᴇʟ"),
+        BotCommand("links", "ᴀʟʟ ᴄʜᴀɴɴᴇʟ ʟɪɴᴋs"),
+        BotCommand("genlink", "ᴘʀᴏᴛᴇᴄᴛ ᴀ ʟɪɴᴋ"),
+        BotCommand("add_admin", "ᴀᴅᴅ ᴀᴅᴍɪɴ"),
+        BotCommand("remove_admin", "ʀᴇᴍᴏᴠᴇ ᴀᴅᴍɪɴ"),
+        BotCommand("list_admin", "ᴀᴅᴍɪɴ ʟɪsᴛ"),
+        BotCommand("status", "ʙᴏᴛ sᴛᴀᴛᴜs"),
+        BotCommand("broadcast", "ʙʀᴏᴀᴅᴄᴀsᴛ ᴍsɢ"),
+        BotCommand("get", "ғɪɴᴅ ᴄʜᴀɴɴᴇʟ"),
     ]
     try:
         await client.set_bot_commands(commands)
