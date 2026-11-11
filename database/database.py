@@ -1,4 +1,3 @@
-# +++ Modified & Optimized for Ultra-Fast LinkShare Bot +++
 import motor.motor_asyncio
 import base64
 from config import DB_URI, DB_NAME, ADMINS
@@ -15,7 +14,7 @@ fsub_channels_collection = database['fsub_channels']
 admins_collection = database['admins']
 settings_collection = database['settings']
 
-# --- CACHE FOR HIGH SPEED & LOW LATENCY ---
+# --- MEMORY CACHE ---
 _cached_user_count = 0
 _last_count_update = None
 _cache_expiry_seconds = 300
@@ -35,8 +34,7 @@ async def add_user(user_id: int) -> bool:
                 _cached_user_count += 1
             return True
         return False
-    except Exception as e:
-        print(f"Error adding user {user_id}: {e}")
+    except Exception:
         return False
 
 async def present_user(user_id: int) -> bool:
@@ -54,7 +52,7 @@ async def total_users_count() -> Union[int, str]:
         _cached_user_count = count
         _last_count_update = now
         return count
-    except Exception as e:
+    except Exception:
         if _cached_user_count > 0:
             return _cached_user_count
         return "Checking..."
@@ -73,7 +71,7 @@ async def del_user(user_id: int) -> bool:
     except Exception:
         return False
 
-# ─── ADMIN SYSTEM ───────────────────────────────────────────────────────
+# ─── ADMIN FUNCTIONS ────────────────────────────────────────────────────
 async def is_admin(user_id: int) -> bool:
     if user_id in ADMINS:
         return True
@@ -104,9 +102,8 @@ async def list_admins() -> list:
     except Exception:
         return ADMINS
 
-# ─── SETTINGS (REQ / DIRECT MODE) ───────────────────────────────────────
+# ─── FSUB MODE SETTINGS ─────────────────────────────────────────────────
 async def get_fsub_mode() -> str:
-    """Returns 'request' or 'direct'"""
     try:
         data = await settings_collection.find_one({'_id': 'fsub_mode'})
         return data.get('mode', 'request') if data else 'request'
@@ -127,14 +124,11 @@ async def set_fsub_mode(mode: str) -> bool:
 # ─── FSUB CHANNELS ──────────────────────────────────────────────────────
 async def add_fsub_channel(channel_id: int) -> bool:
     try:
-        existing = await fsub_channels_collection.find_one({'channel_id': int(channel_id)})
-        if existing:
-            return False
-        await fsub_channels_collection.insert_one({
-            'channel_id': int(channel_id),
-            'created_at': datetime.utcnow(),
-            'status': 'active'
-        })
+        await fsub_channels_collection.update_one(
+            {'channel_id': int(channel_id)},
+            {'$set': {'channel_id': int(channel_id), 'status': 'active'}, '$setOnInsert': {'created_at': datetime.utcnow()}},
+            upsert=True
+        )
         return True
     except Exception:
         return False
@@ -153,7 +147,7 @@ async def get_fsub_channels() -> List[int]:
     except Exception:
         return []
 
-# ─── CHANNEL & LINK STORAGE ─────────────────────────────────────────────
+# ─── CHANNELS & ENCODED LINKS ───────────────────────────────────────────
 async def save_channel(channel_id: int) -> bool:
     try:
         await channels_collection.update_one(
@@ -181,7 +175,7 @@ async def delete_channel(channel_id: int) -> bool:
 
 async def save_encoded_link(channel_id: int) -> Optional[str]:
     try:
-        encoded_link = base64.urlsafe_b64encode(str(channel_id).encode()).decode().rstrip("=")
+        encoded_link = base64.urlsafe_b64encode(str(channel_id).encode()).decode()
         await channels_collection.update_one(
             {"channel_id": channel_id},
             {"$set": {"encoded_link": encoded_link, "status": "active", "updated_at": datetime.utcnow()}},
@@ -195,14 +189,11 @@ async def get_channel_by_encoded_link(encoded_link: str) -> Optional[int]:
     if not isinstance(encoded_link, str):
         return None
     try:
-        # direct lookup
         channel = await channels_collection.find_one({"encoded_link": encoded_link, "status": "active"})
         if channel and "channel_id" in channel:
             return channel["channel_id"]
-        # fallback base64 decode if not matched by string
         padded = encoded_link + "=" * ((4 - len(encoded_link) % 4) % 4)
-        decoded_id = int(base64.urlsafe_b64decode(padded.encode()).decode())
-        return decoded_id
+        return int(base64.urlsafe_b64decode(padded.encode()).decode())
     except Exception:
         return None
 
@@ -229,9 +220,43 @@ async def get_channel_by_encoded_link2(encoded_link: str) -> Optional[int]:
     except Exception:
         return None
 
+async def save_invite_link(channel_id: int, invite_link: str, is_request: bool) -> bool:
+    try:
+        await channels_collection.update_one(
+            {"channel_id": channel_id},
+            {"$set": {"current_invite_link": invite_link, "is_request_link": is_request, "invite_link_created_at": datetime.utcnow(), "status": "active"}},
+            upsert=True
+        )
+        return True
+    except Exception:
+        return False
+
+async def get_current_invite_link(channel_id: int) -> Optional[dict]:
+    try:
+        channel = await channels_collection.find_one({"channel_id": channel_id, "status": "active"})
+        if channel and "current_invite_link" in channel:
+            return {"invite_link": channel["current_invite_link"], "is_request": channel.get("is_request_link", False)}
+        return None
+    except Exception:
+        return None
+
 async def get_original_link(channel_id: int) -> Optional[str]:
     try:
         channel = await channels_collection.find_one({"channel_id": channel_id, "status": "active"})
         return channel.get("original_link") if channel else None
     except Exception:
         return None
+
+async def set_approval_off(channel_id: int, off: bool = True) -> bool:
+    try:
+        await channels_collection.update_one({"channel_id": channel_id}, {"$set": {"approval_off": off}}, upsert=True)
+        return True
+    except Exception:
+        return False
+
+async def is_approval_off(channel_id: int) -> bool:
+    try:
+        channel = await channels_collection.find_one({"channel_id": channel_id})
+        return bool(channel and channel.get("approval_off", False))
+    except Exception:
+        return False
