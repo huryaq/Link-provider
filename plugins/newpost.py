@@ -1,87 +1,166 @@
-# +++ Edited By Gojo [telegram username: @DoraShin_hlo] 
 import asyncio
-import base64
 from bot import Bot
 from pyrogram import Client, filters
-from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message
-from pyrogram.errors import UserNotParticipant, FloodWait, ChatAdminRequired, RPCError
-from pyrogram.errors import InviteHashExpired, InviteRequestSent
-from database.database import save_channel, delete_channel, get_channels
-from config import *
-from database.database import *
-from helper_func import *
-from datetime import datetime, timedelta
+from pyrogram.types import InlineKeyboardMarkup, Message
+from pyrogram.errors import UserNotParticipant, FloodWait, RPCError
+from config import DATABASE_CHANNEL
+from database.database import (
+    save_channel, delete_channel, get_channels,
+    save_encoded_link, save_encoded_link2, channels_collection
+)
+from helper_func import is_owner_or_admin
+from plugins.helpers import get_preview, sbtn, reply_ui, edit_ui
 
 PAGE_SIZE = 6
 
-# Revoke invite link after 5-10 minutes
+# Kept for backward compatibility if imported anywhere
 async def revoke_invite_after_5_minutes(client: Bot, channel_id: int, link: str, is_request: bool = False):
-    await asyncio.sleep(300)  # 10 minutes
+    await asyncio.sleep(300)
     try:
-        if is_request:
-            await client.revoke_chat_invite_link(channel_id, link)
-            print(f"Jᴏɪɴ ʀᴇǫᴜᴇsᴛ ʟɪɴᴋ ʀᴇᴠᴏᴋᴇᴅ ғᴏʀ ᴄʜᴀɴɴᴇʟ {channel_id}")
-        else:
-            await client.revoke_chat_invite_link(channel_id, link)
-            print(f"Iɴᴠɪᴛᴇ ʟɪɴᴋ ʀᴇᴠᴏᴋᴇᴅ ғᴏʀ ᴄʜᴀɴɴᴇʟ {channel_id}")
-    except Exception as e:
-        print(f"Fᴀɪʟᴇᴅ ᴛᴏ ʀᴇᴠᴏᴋᴇ ɪɴᴠɪᴛᴇ ғᴏʀ ᴄʜᴀɴɴᴇʟ {channel_id}: {e}")
+        await client.revoke_chat_invite_link(channel_id, link)
+    except Exception:
+        pass
 
-# channel add cmnd
-@Bot.on_message(filters.command('addch') & is_owner_or_admin)
+# ─── ADD CHANNEL (/addch) ──────────────────────────────────────────────
+@Bot.on_message(filters.command(['addch', 'setchannel']) & is_owner_or_admin)
 async def set_channel(client: Bot, message: Message):
+    close_btn = InlineKeyboardMarkup([[sbtn("✖ ᴄʟᴏsᴇ", callback_data="close", style="danger")]])
     try:
         channel_id = int(message.command[1])
     except (IndexError, ValueError):
-        return await message.reply("<b><blockquote expandable>Iɴᴠᴀʟɪᴅ ᴄʜᴀɴɴᴇʟ ID. Exᴀᴍᴘʟᴇ: <code>/setchannel &lt;channel_id&gt;</code></b>")
-    
+        return await reply_ui(
+            message,
+            f"{get_preview()}"
+            f"<blockquote><b>➲ 𝗜𝗡𝗩𝗔𝗟𝗜𝗗 𝗜𝗡𝗣𝗨𝗧 ⚠️</b></blockquote>\n"
+            f"<blockquote>◍ ᴜsᴀɢᴇ: <code>/addch -100xxxxxxxxxx</code></blockquote>",
+            reply_markup=close_btn
+        )
+
     try:
         chat = await client.get_chat(channel_id)
-
-        if chat.permissions and not (chat.permissions.can_post_messages or chat.permissions.can_edit_messages):
-            return await message.reply(f"<b><blockquote expandable>I ᴀᴍ ɪɴ {chat.title}, ʙᴜᴛ I ʟᴀᴄᴋ ᴘᴏsᴛɪɴɢ ᴏʀ ᴇᴅɪᴛɪɴɢ ᴘᴇʀᴍɪssɪᴏɴs.</b>")
-        
         await save_channel(channel_id)
         base64_invite = await save_encoded_link(channel_id)
-        normal_link = f"https://t.me/{client.username}?start={base64_invite}"
-        base64_request = await encode(str(channel_id))
-        await save_encoded_link2(channel_id, base64_request)
-        request_link = f"https://t.me/{client.username}?start=req_{base64_request}"
-        reply_text = (
-            f"<b><blockquote expandable>✅ Cʜᴀɴɴᴇʟ {chat.title} ({channel_id}) ʜᴀs ʙᴇᴇɴ ᴀᴅᴅᴇᴅ sᴜᴄᴄᴇssғᴜʟʟʏ.</b>\n\n"
-            f"<b>🔗 Nᴏʀᴍᴀʟ Lɪɴᴋ:</b> <code>{normal_link}</code>\n"
-            f"<b>🔗 Rᴇǫᴜᴇsᴛ Lɪɴᴋ:</b> <code>{request_link}</code>"
-        )
-        return await message.reply(reply_text)
-    
-    except UserNotParticipant:
-        return await message.reply("<b><blockquote expandable>I ᴀᴍ ɴᴏᴛ ᴀ ᴍᴇᴍʙᴇʀ ᴏғ ᴛʜɪs ᴄʜᴀɴɴᴇʟ. Pʟᴇᴀsᴇ ᴀᴅᴅ ᴍᴇ ᴀɴᴅ ᴛʀʏ ᴀɢᴀɪɴ.</b>")
-    except FloodWait as e:
-        await asyncio.sleep(e.x)
-        return await set_channel(client, message)
-    except RPCError as e:
-        return await message.reply(f"RPC Error: {str(e)}")
-    except Exception as e:
-        return await message.reply(f"Unexpected Error: {str(e)}")
+        await save_encoded_link2(channel_id, base64_invite)
 
-# Delete channel command
-@Bot.on_message(filters.command('delch') & is_owner_or_admin)
+        normal_link = f"https://t.me/{client.username}?start={base64_invite}"
+        request_link = f"https://t.me/{client.username}?start=req_{base64_invite}"
+
+        reply_text = (
+            f"{get_preview()}"
+            f"<blockquote><b>➲ 𝗖𝗛𝗔𝗡𝗡𝗘𝗟 𝗔𝗗𝗗𝗘𝗗 ⚡</b></blockquote>\n"
+            f"<blockquote>▸ <b>{chat.title}</b>\n"
+            f"◍ ɪᴅ: <code>{channel_id}</code>\n\n"
+            f"◍ <b>ɴᴏʀᴍᴀʟ:</b> <code>{normal_link}</code>\n"
+            f"◍ <b>ʀᴇǫᴜᴇsᴛ:</b> <code>{request_link}</code></blockquote>"
+        )
+        return await reply_ui(message, reply_text, reply_markup=close_btn)
+
+    except UserNotParticipant:
+        return await reply_ui(
+            message,
+            f"{get_preview()}<blockquote><b>➲ 𝗘𝗥𝗥𝗢𝗥 ❌</b></blockquote>\n"
+            f"<blockquote>◍ ɪ ᴀᴍ ɴᴏᴛ ᴀ ᴍᴇᴍʙᴇʀ ᴏғ ᴛʜɪs ᴄʜᴀɴɴᴇʟ. ᴘʟᴇᴀsᴇ ᴀᴅᴅ ᴍᴇ ᴀs ᴀᴅᴍɪɴ ғɪʀsᴛ.</blockquote>",
+            reply_markup=close_btn
+        )
+    except FloodWait as e:
+        await asyncio.sleep(e.value)
+        return await set_channel(client, message)
+    except Exception as e:
+        return await reply_ui(
+            message,
+            f"{get_preview()}<blockquote><b>➲ 𝗘𝗥𝗥𝗢𝗥 ❌</b></blockquote>\n<blockquote><code>{str(e)}</code></blockquote>",
+            reply_markup=close_btn
+        )
+
+# ─── DELETE CHANNEL (/delch) ───────────────────────────────────────────
+@Bot.on_message(filters.command(['delch', 'delchannel']) & is_owner_or_admin)
 async def del_channel(client: Bot, message: Message):
+    close_btn = InlineKeyboardMarkup([[sbtn("✖ ᴄʟᴏsᴇ", callback_data="close", style="danger")]])
     try:
         channel_id = int(message.command[1])
     except (IndexError, ValueError):
-        return await message.reply("<b><blockquote expandable>Iɴᴠᴀʟɪᴅ ᴄʜᴀɴɴᴇʟ ID. Exᴀᴍᴘʟᴇ: <code>/delch &lt;channel_id&gt;</code></b>")
-    
-    await delete_channel(channel_id)
-    return await message.reply(f"<b><blockquote expandable>❌ Cʜᴀɴɴᴇʟ {channel_id} ʜᴀs ʙᴇᴇɴ ʀᴇᴍᴏᴠᴇᴅ sᴜᴄᴄᴇssғᴜʟʟʏ.</b>")
+        return await reply_ui(
+            message,
+            f"{get_preview()}<blockquote><b>➲ 𝗜𝗡𝗩𝗔𝗟𝗜𝗗 𝗜𝗡𝗣𝗨𝗧 ⚠️</b></blockquote>\n"
+            f"<blockquote>◍ ᴜsᴀɢᴇ: <code>/delch -100xxxxxxxxxx</code></blockquote>",
+            reply_markup=close_btn
+        )
 
-# Channel post command
+    await delete_channel(channel_id)
+    return await reply_ui(
+        message,
+        f"{get_preview()}"
+        f"<blockquote><b>➲ 𝗖𝗛𝗔𝗡𝗡𝗘𝗟 𝗥𝗘𝗠𝗢𝗩𝗘𝗗</b></blockquote>\n"
+        f"<blockquote>◍ ɪᴅ: <code>{channel_id}</code></blockquote>",
+        reply_markup=close_btn
+    )
+
+# ─── PUBLIC DIRECTORY (/index & /get) (AS SEEN IN VIDEO) ───────────────
+@Bot.on_message(filters.command('index') & filters.private)
+async def index_directory(client: Bot, message: Message):
+    channels = await get_channels()
+    close_btn = InlineKeyboardMarkup([[sbtn("✖ ᴄʟᴏsᴇ", callback_data="close", style="danger")]])
+    if not channels:
+        return await reply_ui(
+            message,
+            f"{get_preview()}<blockquote><b>➲ 𝗖𝗛𝗔𝗡𝗡𝗘𝗟 𝗗𝗜𝗥𝗘𝗖𝗧𝗢𝗥𝗬 🔎</b></blockquote>\n"
+            f"<blockquote>◍ ɴᴏ ᴄʜᴀɴɴᴇʟs ᴀʀᴇ ᴄᴜʀʀᴇɴᴛʟʏ ʟɪsᴛᴇᴅ ɪɴ ᴛʜᴇ ᴅɪʀᴇᴄᴛᴏʀʏ.</blockquote>",
+            reply_markup=close_btn
+        )
+    await send_request_page(client, message, channels, page=0)
+
+@Bot.on_message(filters.command('get') & filters.private)
+async def search_channel_cmd(client: Bot, message: Message):
+    close_btn = InlineKeyboardMarkup([[sbtn("✖ ᴄʟᴏsᴇ", callback_data="close", style="danger")]])
+    if len(message.command) < 2:
+        return await reply_ui(
+            message,
+            f"{get_preview()}<blockquote><b>➲ 𝗦𝗘𝗔𝗥𝗖𝗛 𝗖𝗛𝗔𝗡𝗡𝗘𝗟 🔎</b></blockquote>\n"
+            f"<blockquote>◍ ᴜsᴀɢᴇ: <code>/get &lt;ᴄʜᴀɴɴᴇʟ ɴᴀᴍᴇ&gt;</code></blockquote>",
+            reply_markup=close_btn
+        )
+
+    query_str = " ".join(message.command[1:]).lower()
+    channels = await get_channels()
+    buttons = []
+
+    for ch_id in channels:
+        try:
+            chat = await client.get_chat(ch_id)
+            if query_str in chat.title.lower():
+                code = await save_encoded_link(ch_id)
+                await save_encoded_link2(ch_id, code)
+                link = f"https://t.me/{client.username}?start=req_{code}"
+                buttons.append([sbtn(f"▸ {chat.title}", url=link, style="primary")])
+        except Exception:
+            pass
+
+    buttons.append([sbtn("✖ ᴄʟᴏsᴇ", callback_data="close", style="danger")])
+    if len(buttons) == 1:
+        return await reply_ui(
+            message,
+            f"{get_preview()}<blockquote><b>➲ 𝗡𝗢 𝗥𝗘𝗦𝗨𝗟𝗧𝗦 𝗙𝗢𝗨𝗡𝗗 ❌</b></blockquote>\n"
+            f"<blockquote>◍ ɴᴏ ᴄʜᴀɴɴᴇʟ ᴍᴀᴛᴄʜᴇᴅ: <code>{query_str}</code></blockquote>",
+            reply_markup=InlineKeyboardMarkup(buttons)
+        )
+
+    await reply_ui(
+        message,
+        f"{get_preview()}<blockquote><b>➲ 𝗦𝗘𝗔𝗥𝗖𝗛 𝗥𝗘𝗦𝗨𝗟𝗧𝗦 🔎</b></blockquote>\n"
+        f"<blockquote>◍ sᴇʟᴇᴄᴛ ᴀ ᴄʜᴀɴɴᴇʟ ʙᴇʟᴏᴡ ᴛᴏ ɢᴇᴛ ᴀ ᴛᴇᴍᴘᴏʀᴀʀʏ ɪɴᴠɪᴛᴇ ʟɪɴᴋ:</blockquote>",
+        reply_markup=InlineKeyboardMarkup(buttons)
+    )
+
+# ─── CHANNEL BUTTON PAGES (/ch_links & /reqlink) ───────────────────────
 @Bot.on_message(filters.command('ch_links') & is_owner_or_admin)
 async def channel_post(client: Bot, message: Message):
     channels = await get_channels()
     if not channels:
-        return await message.reply("<b><blockquote expandable>Nᴏ ᴄʜᴀɴɴᴇʟs ᴀʀᴇ ᴀᴠᴀɪʟᴀʙʟᴇ. Pʟᴇᴀsᴇ ᴜsᴇ /addch ᴛᴏ ᴀᴅᴅ ᴀ ᴄʜᴀɴɴᴇʟ.</b>")
-
+        return await reply_ui(
+            message,
+            f"{get_preview()}<blockquote><b>➲ 𝗡𝗢 𝗖𝗛𝗔𝗡𝗡𝗘𝗟𝗦</b></blockquote>\n"
+            f"<blockquote>◍ ɴᴏ ᴄʜᴀɴɴᴇʟs ᴀᴠᴀɪʟᴀʙʟᴇ. ᴜsᴇ <code>/addch</code> ᴛᴏ ᴀᴅᴅ ᴏɴᴇ.</blockquote>"
+        )
     await send_channel_page(client, message, channels, page=0)
 
 async def send_channel_page(client, message, channels, page, edit=False):
@@ -89,53 +168,57 @@ async def send_channel_page(client, message, channels, page, edit=False):
     start_idx = page * PAGE_SIZE
     end_idx = start_idx + PAGE_SIZE
     buttons = []
-
     row = []
+
     for channel_id in channels[start_idx:end_idx]:
         try:
             base64_invite = await save_encoded_link(channel_id)
             button_link = f"https://t.me/{client.username}?start={base64_invite}"
             chat = await client.get_chat(channel_id)
-            
-            row.append(InlineKeyboardButton(chat.title, url=button_link))
-            
+            row.append(sbtn(f"▸ {chat.title}", url=button_link, style="primary"))
             if len(row) == 2:
                 buttons.append(row)
-                row = [] 
-        except Exception as e:
-            print(f"Error for channel {channel_id}: {e}")
+                row = []
+        except Exception:
+            pass
 
-    if row: 
+    if row:
         buttons.append(row)
 
     nav_buttons = []
     if page > 0:
-        nav_buttons.append(InlineKeyboardButton("• Pʀᴇᴠɪᴏᴜs •", callback_data=f"channelpage_{page-1}"))
+        nav_buttons.append(sbtn("‹ ᴘʀᴇᴠ", callback_data=f"channelpage_{page-1}", style="primary"))
     if page < total_pages - 1:
-        nav_buttons.append(InlineKeyboardButton("• Nᴇxᴛ •", callback_data=f"channelpage_{page+1}"))
-
+        nav_buttons.append(sbtn("ɴᴇxᴛ ›", callback_data=f"channelpage_{page+1}", style="primary"))
     if nav_buttons:
         buttons.append(nav_buttons)
+    buttons.append([sbtn("✖ ᴄʟᴏsᴇ", callback_data="close", style="danger")])
 
-    reply_markup = InlineKeyboardMarkup(buttons)
+    text = (
+        f"{get_preview()}"
+        f"<blockquote><b>➲ 𝗖𝗛𝗔𝗡𝗡𝗘𝗟 𝗗𝗜𝗥𝗘𝗖𝗧𝗢𝗥𝗬</b></blockquote>\n"
+        f"<blockquote>◍ sᴇʟᴇᴄᴛ ᴀ ᴄʜᴀɴɴᴇʟ ʙᴇʟᴏᴡ ᴛᴏ ɢᴇɴᴇʀᴀᴛᴇ ᴀɴ ɪɴsᴛᴀɴᴛ ɪɴᴠɪᴛᴇ ʟɪɴᴋ:</blockquote>"
+    )
     if edit:
-        await message.edit_text("Sᴇʟᴇᴄᴛ ᴀ ᴄʜᴀɴɴᴇʟ ᴛᴏ ᴀᴄᴄᴇss:", reply_markup=reply_markup)
+        await edit_ui(message, text, reply_markup=InlineKeyboardMarkup(buttons))
     else:
-        await message.reply("Sᴇʟᴇᴄᴛ ᴀ ᴄʜᴀɴɴᴇʟ ᴛᴏ ᴀᴄᴄᴇss:", reply_markup=reply_markup)
+        await reply_ui(message, text, reply_markup=InlineKeyboardMarkup(buttons))
 
-@Bot.on_callback_query(filters.regex(r"channelpage_(\d+)"))
+@Bot.on_callback_query(filters.regex(r"^channelpage_(\d+)$"))
 async def paginate_channels(client, callback_query):
     page = int(callback_query.data.split("_")[1])
     channels = await get_channels()
     await send_channel_page(client, callback_query.message, channels, page, edit=True)
 
-# Request post command
 @Bot.on_message(filters.command('reqlink') & is_owner_or_admin)
 async def req_post(client: Bot, message: Message):
     channels = await get_channels()
     if not channels:
-        return await message.reply("<b><blockquote expandable>Nᴏ ᴄʜᴀɴɴᴇʟs ᴀʀᴇ ᴀᴠᴀɪʟᴀʙʟᴇ. Pʟᴇᴀsᴇ ᴜsᴇ /setchannel ᴛᴏ ᴀᴅᴅ ᴀ ᴄʜᴀɴɴᴇʟ</b>")
-
+        return await reply_ui(
+            message,
+            f"{get_preview()}<blockquote><b>➲ 𝗡𝗢 𝗖𝗛𝗔𝗡𝗡𝗘𝗟𝗦</b></blockquote>\n"
+            f"<blockquote>◍ ɴᴏ ᴄʜᴀɴɴᴇʟs ᴀᴠᴀɪʟᴀʙʟᴇ. ᴜsᴇ <code>/addch</code> ᴛᴏ ᴀᴅᴅ ᴏɴᴇ.</blockquote>"
+        )
     await send_request_page(client, message, channels, page=0)
 
 async def send_request_page(client, message, channels, page, edit=False):
@@ -143,209 +226,223 @@ async def send_request_page(client, message, channels, page, edit=False):
     start_idx = page * PAGE_SIZE
     end_idx = start_idx + PAGE_SIZE
     buttons = []
-
     row = []
+
     for channel_id in channels[start_idx:end_idx]:
         try:
-            base64_request = await encode(str(channel_id))
-            await save_encoded_link2(channel_id, base64_request)
-            button_link = f"https://t.me/{client.username}?start=req_{base64_request}"
+            code = await save_encoded_link(channel_id)
+            await save_encoded_link2(channel_id, code)
+            button_link = f"https://t.me/{client.username}?start=req_{code}"
             chat = await client.get_chat(channel_id)
-
-            row.append(InlineKeyboardButton(chat.title, url=button_link))
-
+            row.append(sbtn(f"▸ {chat.title}", url=button_link, style="primary"))
             if len(row) == 2:
                 buttons.append(row)
-                row = [] 
-        except Exception as e:
-            print(f"Error generating request link for channel {channel_id}: {e}")
+                row = []
+        except Exception:
+            pass
 
-    if row: 
+    if row:
         buttons.append(row)
 
     nav_buttons = []
     if page > 0:
-        nav_buttons.append(InlineKeyboardButton("• Pʀᴇᴠɪᴏᴜs •", callback_data=f"reqpage_{page-1}"))
+        nav_buttons.append(sbtn("‹ ᴘʀᴇᴠ", callback_data=f"reqpage_{page-1}", style="primary"))
     if page < total_pages - 1:
-        nav_buttons.append(InlineKeyboardButton("• Nᴇxᴛ •", callback_data=f"reqpage_{page+1}"))
-
+        nav_buttons.append(sbtn("ɴᴇxᴛ ›", callback_data=f"reqpage_{page+1}", style="primary"))
     if nav_buttons:
-        buttons.append(nav_buttons) 
-    reply_markup = InlineKeyboardMarkup(buttons)
-    if edit:
-        await message.edit_text("Sᴇʟᴇᴄᴛ ᴀ ᴄʜᴀɴɴᴇʟ ᴛᴏ ʀᴇǫᴜᴇsᴛ ᴀᴄᴄᴇss:", reply_markup=reply_markup)
-    else:
-        await message.reply("Sᴇʟᴇᴄᴛ ᴀ ᴄʜᴀɴɴᴇʟ ᴛᴏ ʀᴇǫᴜᴇsᴛ ᴀᴄᴄᴇss:", reply_markup=reply_markup)
+        buttons.append(nav_buttons)
+    buttons.append([sbtn("✖ ᴄʟᴏsᴇ", callback_data="close", style="danger")])
 
-@Bot.on_callback_query(filters.regex(r"reqpage_(\d+)"))
+    text = (
+        f"{get_preview()}"
+        f"<blockquote><b>➲ 𝗖𝗛𝗔𝗡𝗡𝗘𝗟 𝗗𝗜𝗥𝗘𝗖𝗧𝗢𝗥𝗬 🔎</b></blockquote>\n"
+        f"<blockquote>◍ sᴇʟᴇᴄᴛ ᴀ ᴄʜᴀɴɴᴇʟ ʙᴇʟᴏᴡ ᴛᴏ ʀᴇǫᴜᴇsᴛ ᴀ ᴛᴇᴍᴘᴏʀᴀʀʏ ɪɴᴠɪᴛᴇ ʟɪɴᴋ:</blockquote>"
+    )
+    if edit:
+        await edit_ui(message, text, reply_markup=InlineKeyboardMarkup(buttons))
+    else:
+        await reply_ui(message, text, reply_markup=InlineKeyboardMarkup(buttons))
+
+@Bot.on_callback_query(filters.regex(r"^reqpage_(\d+)$"))
 async def paginate_requests(client, callback_query):
     page = int(callback_query.data.split("_")[1])
     channels = await get_channels()
     await send_request_page(client, callback_query.message, channels, page, edit=True)
 
-# Links command - show all links as text
+# ─── ALL LINKS LIST (/links) ───────────────────────────────────────────
 @Bot.on_message(filters.command('links') & is_owner_or_admin)
 async def show_links(client: Bot, message: Message):
     channels = await get_channels()
     if not channels:
-        return await message.reply("<b><blockquote expandable>Nᴏ ᴄʜᴀɴɴᴇʟs ᴀʀᴇ ᴀᴠᴀɪʟᴀʙʟᴇ. Pʟᴇᴀsᴇ ᴜsᴇ /addch ᴛᴏ ᴀᴅᴅ ᴀ ᴄʜᴀɴɴᴇʟ.</b>")
-
+        return await reply_ui(
+            message,
+            f"{get_preview()}<blockquote><b>➲ 𝗡𝗢 𝗖𝗛𝗔𝗡𝗡𝗘𝗟𝗦</b></blockquote>\n"
+            f"<blockquote>◍ ɴᴏ ᴄʜᴀɴɴᴇʟs ᴀᴠᴀɪʟᴀʙʟᴇ. ᴜsᴇ <code>/addch</code> ᴛᴏ ᴀᴅᴅ ᴏɴᴇ.</blockquote>"
+        )
     await send_links_page(client, message, channels, page=0)
 
 async def send_links_page(client, message, channels, page, edit=False):
     total_pages = (len(channels) + PAGE_SIZE - 1) // PAGE_SIZE
     start_idx = page * PAGE_SIZE
     end_idx = start_idx + PAGE_SIZE
-    
-    links_text = "<b>➤ Aʟʟ Cʜᴀɴɴᴇʟ Lɪɴᴋs:</b>\n\n"
-    
+
+    links_text = f"{get_preview()}<blockquote><b>➲ 𝗔𝗟𝗟 𝗖𝗛𝗔𝗡𝗡𝗘𝗟 𝗟𝗜𝗡𝗞𝗦</b></blockquote>\n"
     for i, channel_id in enumerate(channels[start_idx:end_idx], start=start_idx + 1):
         try:
             chat = await client.get_chat(channel_id)
-            base64_invite = await save_encoded_link(channel_id)
-            normal_link = f"https://t.me/{client.username}?start={base64_invite}"
-            base64_request = await encode(str(channel_id))
-            await save_encoded_link2(channel_id, base64_request)
-            request_link = f"https://t.me/{client.username}?start=req_{base64_request}"
-            
-            links_text += f"<b>{i}. {chat.title}</b>\n"
-            links_text += f"<b>➥ Nᴏʀᴍᴀʟ:</b> <code>{normal_link}</code>\n"
-            links_text += f"<b>➤ Rᴇǫᴜᴇsᴛ:</b> <code>{request_link}</code>\n\n"
-            
-        except Exception as e:
-            print(f"Error for channel {channel_id}: {e}")
-            links_text += f"<b>{i}. Channel {channel_id}</b> (Error)\n\n"
+            code = await save_encoded_link(channel_id)
+            await save_encoded_link2(channel_id, code)
+            normal_link = f"https://t.me/{client.username}?start={code}"
+            request_link = f"https://t.me/{client.username}?start=req_{code}"
+            links_text += (
+                f"<blockquote>▸ <b>{i}. {chat.title}</b>\n"
+                f"◍ ɪᴅ: <code>{channel_id}</code>\n"
+                f"◍ ɴᴏʀᴍᴀʟ: <code>{normal_link}</code>\n"
+                f"◍ ʀᴇǫᴜᴇsᴛ: <code>{request_link}</code></blockquote>\n"
+            )
+        except Exception:
+            links_text += f"<blockquote>▸ <b>{i}. ᴄʜᴀɴɴᴇʟ</b> <code>{channel_id}</code> (ᴇʀʀᴏʀ)</blockquote>\n"
 
-    # Add pagination info
-    links_text += f"<b>📄 Pᴀɢᴇ {page + 1} ᴏғ {total_pages}</b>"
-    
-    # Create navigation buttons
+    links_text += f"<blockquote>◍ ᴘᴀɢᴇ <code>{page + 1}</code> ᴏғ <code>{total_pages}</code></blockquote>"
+
     buttons = []
     nav_buttons = []
     if page > 0:
-        nav_buttons.append(InlineKeyboardButton("• Pʀᴇᴠɪᴏᴜs •", callback_data=f"linkspage_{page-1}"))
+        nav_buttons.append(sbtn("‹ ᴘʀᴇᴠ", callback_data=f"linkspage_{page-1}", style="primary"))
     if page < total_pages - 1:
-        nav_buttons.append(InlineKeyboardButton("• Nᴇxᴛ •", callback_data=f"linkspage_{page+1}"))
-
+        nav_buttons.append(sbtn("ɴᴇxᴛ ›", callback_data=f"linkspage_{page+1}", style="primary"))
     if nav_buttons:
         buttons.append(nav_buttons)
-    
-    reply_markup = InlineKeyboardMarkup(buttons) if buttons else None
-    
-    if edit:
-        await message.edit_text(links_text, reply_markup=reply_markup)
-    else:
-        await message.reply(links_text, reply_markup=reply_markup)
+    buttons.append([sbtn("✖ ᴄʟᴏsᴇ", callback_data="close", style="danger")])
 
-@Bot.on_callback_query(filters.regex(r"linkspage_(\d+)"))
+    if edit:
+        await edit_ui(message, links_text, reply_markup=InlineKeyboardMarkup(buttons))
+    else:
+        await reply_ui(message, links_text, reply_markup=InlineKeyboardMarkup(buttons))
+
+@Bot.on_callback_query(filters.regex(r"^linkspage_(\d+)$"))
 async def paginate_links(client, callback_query):
     page = int(callback_query.data.split("_")[1])
     channels = await get_channels()
     await send_links_page(client, callback_query.message, channels, page, edit=True)
 
-# Bulk link generation command
+# ─── BULK LINK GENERATION (/bulklink) ──────────────────────────────────
 @Bot.on_message(filters.command('bulklink') & is_owner_or_admin)
 async def bulk_link(client: Bot, message: Message):
-    user_id = message.from_user.id
-
+    close_btn = InlineKeyboardMarkup([[sbtn("✖ ᴄʟᴏsᴇ", callback_data="close", style="danger")]])
     if len(message.command) < 2:
-        return await message.reply("<b><blockquote expandable>ᴜsᴀɢᴇ: <code>/bulklink &lt;id1&gt; &lt;id2&gt; ...</code></b>")
+        return await reply_ui(
+            message,
+            f"{get_preview()}<blockquote><b>➲ 𝗕𝗨𝗟𝗞 𝗟𝗜𝗡𝗞𝗦</b></blockquote>\n"
+            f"<blockquote>◍ ᴜsᴀɢᴇ: <code>/bulklink &lt;id1&gt; &lt;id2&gt; ...</code></blockquote>",
+            reply_markup=close_btn
+        )
 
     ids = message.command[1:]
-    reply_text = "<b>➤ Bᴜʟᴋ Lɪɴᴋ Gᴇɴᴇʀᴀᴛɪᴏɴ:</b>\n\n"
+    reply_text = f"{get_preview()}<blockquote><b>➲ 𝗕𝗨𝗟𝗞 𝗟𝗜𝗡𝗞𝗦 𝗚𝗘𝗡𝗘𝗥𝗔𝗧𝗘𝗗 ⚡</b></blockquote>\n"
     for idx, id_str in enumerate(ids, start=1):
         try:
             channel_id = int(id_str)
             chat = await client.get_chat(channel_id)
-            base64_invite = await save_encoded_link(channel_id)
-            normal_link = f"https://t.me/{client.username}?start={base64_invite}"
-            base64_request = await encode(str(channel_id))
-            await save_encoded_link2(channel_id, base64_request)
-            request_link = f"https://t.me/{client.username}?start=req_{base64_request}"
-            reply_text += f"<b>{idx}. {chat.title} ({channel_id})</b>\n"
-            reply_text += f"<b>➥ Nᴏʀᴍᴀʟ:</b> <code>{normal_link}</code>\n"
-            reply_text += f"<b>➤ Rᴇǫᴜᴇsᴛ:</b> <code>{request_link}</code>\n\n"
+            await save_channel(channel_id)
+            code = await save_encoded_link(channel_id)
+            await save_encoded_link2(channel_id, code)
+            normal_link = f"https://t.me/{client.username}?start={code}"
+            request_link = f"https://t.me/{client.username}?start=req_{code}"
+            reply_text += (
+                f"<blockquote>▸ <b>{idx}. {chat.title}</b>\n"
+                f"◍ ɪᴅ: <code>{channel_id}</code>\n"
+                f"◍ ɴᴏʀᴍᴀʟ: <code>{normal_link}</code>\n"
+                f"◍ ʀᴇǫᴜᴇsᴛ: <code>{request_link}</code></blockquote>\n"
+            )
         except Exception as e:
-            reply_text += f"<b>{idx}. Channel {id_str}</b> (Error: {e})\n\n"
-    await message.reply(reply_text)
+            reply_text += f"<blockquote>▸ <b>{idx}. {id_str}</b> (ᴇʀʀᴏʀ: <code>{e}</code>)</blockquote>\n"
 
+    await reply_ui(message, reply_text, reply_markup=close_btn)
 
-
+# ─── GENERATE PROTECTED LINK (/genlink) ────────────────────────────────
 @Bot.on_message(filters.command('genlink') & filters.private & is_owner_or_admin)
 async def generate_link_command(client: Bot, message: Message):
-    user_id = message.from_user.id
+    close_btn = InlineKeyboardMarkup([[sbtn("✖ ᴄʟᴏsᴇ", callback_data="close", style="danger")]])
     if len(message.command) < 2:
-        return await message.reply("<b>Usage:</b> <code>/genlink &lt;link&gt;</code>")
+        return await reply_ui(
+            message,
+            f"{get_preview()}<blockquote><b>➲ 𝗚𝗘𝗡𝗘𝗥𝗔𝗧𝗘 𝗟𝗜𝗡𝗞</b></blockquote>\n"
+            f"<blockquote>◍ ᴜsᴀɢᴇ: <code>/genlink &lt;url&gt;</code></blockquote>",
+            reply_markup=close_btn
+        )
 
     link = message.command[1]
-    # Store the link in the database channel
     try:
         sent_msg = await client.send_message(DATABASE_CHANNEL, f"#LINK\n{link}")
-        channel_id = sent_msg.id  # Use id as unique id for this link
-        # Save encoded links
-        base64_invite = await save_encoded_link(channel_id)
-        base64_request = await encode(str(channel_id))
-        await save_encoded_link2(channel_id, base64_request)
-        # Store the original link in the database
-        from database.database import channels_collection
+        channel_id = sent_msg.id
+        code = await save_encoded_link(channel_id)
+        await save_encoded_link2(channel_id, code)
         await channels_collection.update_one(
             {"channel_id": channel_id},
-            {"$set": {"original_link": link}},
+            {"$set": {"original_link": link, "status": "active"}},
             upsert=True
         )
-        normal_link = f"https://t.me/{client.username}?start={base64_invite}"
-        request_link = f"https://t.me/{client.username}?start=req_{base64_request}"
+        normal_link = f"https://t.me/{client.username}?start={code}"
+        request_link = f"https://t.me/{client.username}?start=req_{code}"
         reply_text = (
-            f"<b>✅ Link stored and encoded successfully.</b>\n\n"
-            f"<b>🔗 Normal Link:</b> <code>{normal_link}</code>\n"
-            f"<b>🔗 Request Link:</b> <code>{request_link}</code>"
+            f"{get_preview()}"
+            f"<blockquote><b>➲ 𝗟𝗜𝗡𝗞 𝗦𝗧𝗢𝗥𝗘𝗗 ⚡</b></blockquote>\n"
+            f"<blockquote>◍ <b>ɴᴏʀᴍᴀʟ:</b> <code>{normal_link}</code>\n"
+            f"◍ <b>ʀᴇǫᴜᴇsᴛ:</b> <code>{request_link}</code></blockquote>"
         )
-        await message.reply(reply_text)
+        await reply_ui(message, reply_text, reply_markup=close_btn)
     except Exception as e:
-        await message.reply(f"<b>Error storing link:</b> <code>{e}</code>")
+        await reply_ui(
+            message,
+            f"{get_preview()}<blockquote><b>➲ 𝗘𝗥𝗥𝗢𝗥 ❌</b></blockquote>\n<blockquote><code>{e}</code></blockquote>",
+            reply_markup=close_btn
+        )
 
+# ─── CONNECTED CHANNELS LIST (/channels) ───────────────────────────────
 @Bot.on_message(filters.command('channels') & is_owner_or_admin)
 async def show_channel_ids(client: Bot, message: Message):
     channels = await get_channels()
     if not channels:
-        return await message.reply("<b><blockquote expandable>Nᴏ ᴄʜᴀɴɴᴇʟs ᴀʀᴇ ᴀᴠᴀɪʟᴀʙʟᴇ. Pʟᴇᴀsᴇ ᴜsᴇ /addch ᴛᴏ ᴀᴅᴅ ᴀ ᴄʜᴀɴɴᴇʟ.</b>")
-    status_msg = await message.reply("<i>Please wait...</i>")
-    await send_channel_ids_page(client, message, channels, page=0, status_msg=status_msg)
+        return await reply_ui(
+            message,
+            f"{get_preview()}<blockquote><b>➲ 𝗖𝗛𝗔𝗡𝗡𝗘𝗟𝗦</b></blockquote>\n"
+            f"<blockquote>◍ ɴᴏ ᴄʜᴀɴɴᴇʟs ᴄᴏɴɴᴇᴄᴛᴇᴅ ʏᴇᴛ.</blockquote>"
+        )
+    await send_channel_ids_page(client, message, channels, page=0)
 
-async def send_channel_ids_page(client, message, channels, page, status_msg=None, edit=False):
-    PAGE_SIZE = 10
-    total_pages = (len(channels) + PAGE_SIZE - 1) // PAGE_SIZE
-    start_idx = page * PAGE_SIZE
-    end_idx = start_idx + PAGE_SIZE
-    text = "<b>➤ Cᴏɴɴᴇᴄᴛᴇᴅ Cʜᴀɴɴᴇʟs (ID & Name):</b>\n\n"
+async def send_channel_ids_page(client, message, channels, page, edit=False):
+    PER_PAGE = 10
+    total_pages = (len(channels) + PER_PAGE - 1) // PER_PAGE
+    start_idx = page * PER_PAGE
+    end_idx = start_idx + PER_PAGE
+
+    text = f"{get_preview()}<blockquote><b>➲ 𝗖𝗢𝗡𝗡𝗘𝗖𝗧𝗘𝗗 𝗖𝗛𝗔𝗡𝗡𝗘𝗟𝗦</b></blockquote>\n"
     for idx, channel_id in enumerate(channels[start_idx:end_idx], start=start_idx + 1):
         try:
             chat = await client.get_chat(channel_id)
-            text += f"<b>{idx}. {chat.title}</b> <code>({channel_id})</code>\n"
-        except Exception as e:
-            text += f"<b>{idx}. Channel {channel_id}</b> (Error)\n"
-    text += f"\n<b>📄 Pᴀɢᴇ {page + 1} ᴏғ {total_pages}</b>"
-    # Navigation buttons
+            text += f"<blockquote>▸ <b>{idx}. {chat.title}</b>\n◍ ɪᴅ: <code>{channel_id}</code></blockquote>\n"
+        except Exception:
+            text += f"<blockquote>▸ <b>{idx}. ᴜɴᴋɴᴏᴡɴ</b>\n◍ ɪᴅ: <code>{channel_id}</code></blockquote>\n"
+
+    text += f"<blockquote>◍ ᴘᴀɢᴇ <code>{page + 1}</code> ᴏғ <code>{total_pages}</code></blockquote>"
+
     buttons = []
     nav_buttons = []
     if page > 0:
-        nav_buttons.append(InlineKeyboardButton("• Pʀᴇᴠɪᴏᴜs •", callback_data=f"channelids_{page-1}"))
+        nav_buttons.append(sbtn("‹ ᴘʀᴇᴠ", callback_data=f"channelids_{page-1}", style="primary"))
     if page < total_pages - 1:
-        nav_buttons.append(InlineKeyboardButton("• Nᴇxᴛ •", callback_data=f"channelids_{page+1}"))
+        nav_buttons.append(sbtn("ɴᴇxᴛ ›", callback_data=f"channelids_{page+1}", style="primary"))
     if nav_buttons:
         buttons.append(nav_buttons)
-    reply_markup = InlineKeyboardMarkup(buttons) if buttons else None
-    if edit:
-        await message.edit_text(text, reply_markup=reply_markup)
-    else:
-        await message.reply(text, reply_markup=reply_markup)
-    if status_msg:
-        try:
-            await status_msg.delete()
-        except:
-            pass
+    buttons.append([sbtn("✖ ᴄʟᴏsᴇ", callback_data="close", style="danger")])
 
-@Bot.on_callback_query(filters.regex(r"channelids_(\d+)"))
+    if edit:
+        await edit_ui(message, text, reply_markup=InlineKeyboardMarkup(buttons))
+    else:
+        await reply_ui(message, text, reply_markup=InlineKeyboardMarkup(buttons))
+
+@Bot.on_callback_query(filters.regex(r"^channelids_(\d+)$"))
 async def paginate_channel_ids(client, callback_query):
     page = int(callback_query.data.split("_")[1])
     channels = await get_channels()
