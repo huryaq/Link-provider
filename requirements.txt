@@ -1,10 +1,9 @@
-pyrofork
-TgCrypto 
+pyrofork>=2.3.58
+TgCrypto
 pyromod
 python-dotenv
-pymongo 
-dnspython 
-motor 
+pymongo
+dnspython
+motor
 aiohttp
-asyncio
 aiofiles
