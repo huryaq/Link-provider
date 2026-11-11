@@ -1,18 +1,18 @@
-# +++ Modified By [telegram username: @Codeflix_Bots
 import asyncio
-import sys
 from datetime import datetime
 from pyrogram import Client
 from pyrogram.enums import ParseMode
 from config import API_HASH, APP_ID, LOGGER, TG_BOT_TOKEN, TG_BOT_WORKERS, PORT, OWNER_ID
 from plugins import web_server
+from plugins.helpers import setup_bot_commands, get_preview, sbtn
+from pyrogram.types import InlineKeyboardMarkup
 import pyrogram.utils
 from aiohttp import web
 
 pyrogram.utils.MIN_CHANNEL_ID = -1009147483647
 
 name = """
-Links Sharing Started
+Links Sharing Bot Started
 """
 
 class Bot(Client):
@@ -31,21 +31,31 @@ class Bot(Client):
         await super().start()
         usr_bot_me = await self.get_me()
         self.uptime = datetime.now()
+        self.username = usr_bot_me.username
+        self.set_parse_mode(ParseMode.HTML)
 
-        # Notify owner of bot restart
+        # Auto-register all commands on VPS start
+        await setup_bot_commands(self)
+
+        # Notify owner of bot restart in new UI
         try:
+            close_markup = InlineKeyboardMarkup([[sbtn("✖ ᴄʟᴏsᴇ", callback_data="close", style="danger")]])
             await self.send_message(
                 chat_id=OWNER_ID,
-                text="<b><blockquote>🤖 Bot Restarted ♻️</blockquote></b>",
+                text=(
+                    f"{get_preview()}"
+                    f"<blockquote><b>➲ 𝗦𝗬𝗦𝗧𝗘𝗠 𝗢𝗡𝗟𝗜𝗡𝗘 ⚡</b></blockquote>\n"
+                    f"<blockquote>◍ ʙᴏᴛ ʀᴇsᴛᴀʀᴛᴇᴅ sᴜᴄᴄᴇssғᴜʟʟʏ!\n"
+                    f"◍ ᴄᴏᴍᴍᴀɴᴅs sʏɴᴄᴇᴅ ᴀᴜᴛᴏᴍᴀᴛɪᴄᴀʟʟʏ.</blockquote>"
+                ),
+                reply_markup=close_markup,
                 parse_mode=ParseMode.HTML
             )
         except Exception as e:
             self.LOGGER(__name__).warning(f"Failed to notify owner ({OWNER_ID}) of bot start: {e}")
 
-        self.set_parse_mode(ParseMode.HTML)
-        self.LOGGER(__name__).info("Bot Running..!\n\nCreated by \nhttps://t.me/Save_ish")
+        self.LOGGER(__name__).info(f"Bot Running..! @{self.username}")
         self.LOGGER(__name__).info(f"{name}")
-        self.username = usr_bot_me.username
 
         # Web-response
         try:
