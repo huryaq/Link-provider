@@ -1,6 +1,7 @@
 import random
-import inspect
-from pyrogram.enums import ParseMode
+import unicodedata
+import aiohttp
+from config import TG_BOT_TOKEN
 from pyrogram.types import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup
 
 # ─── STICKERS & PREVIEW IMAGES POOL ────────────────────────────────────
@@ -23,63 +24,160 @@ IMAGES = [
 ]
 
 def get_preview() -> str:
-    """Zero-width HTML link for instant top preview without file upload lag"""
-    return f'<a href="{random.choice(IMAGES)}">&#8203;</a>'
+    return ""
 
-# ─── SMART COLORED BUTTON BUILDER (PRIMARY / DANGER / SUCCESS) ─────────
-_BTN_PARAMS = inspect.signature(InlineKeyboardButton.__init__).parameters
+# ─── UNICODE & SMALL-CAPS FONT NORMALIZER FOR /get SEARCH ──────────────
+_SMALL_CAPS_MAP = str.maketrans(
+    "ᴀʙᴄᴅᴇꜰɢʜɪᴊᴋʟᴍɴᴏᴘǫʀsꜱᴛᴜᴠᴡxʏᴢ",
+    "abcdefghijklmnopqrstuvwxyz"
+)
 
+def normalize_text(text: str) -> str:
+    """Converts any fancy/bold/small-caps Telegram title into plain lowercase ASCII for accurate search"""
+    if not text:
+        return ""
+    text = text.translate(_SMALL_CAPS_MAP)
+    text = unicodedata.normalize("NFKD", text)
+    clean = "".join(ch.lower() for ch in text if ch.isalnum() or ch.isspace())
+    return " ".join(clean.split())
+
+# ─── COLORED BUTTON BUILDER (PRIMARY / DANGER / SUCCESS) ───────────────
 def sbtn(text: str, callback_data: str = None, url: str = None, style: str = None) -> InlineKeyboardButton:
-    """
-    Creates an InlineKeyboardButton with Telegram's new button color styles
-    ('primary' = Blue, 'danger' = Red, 'success' = Green) if supported by the installed library.
-    """
-    kwargs = {"text": text}
-    if callback_data is not None:
-        kwargs["callback_data"] = callback_data
-    if url is not None:
-        kwargs["url"] = url
-    if style:
-        if "style" in _BTN_PARAMS:
-            kwargs["style"] = style
-        elif "button_style" in _BTN_PARAMS:
-            kwargs["button_style"] = style
-    return InlineKeyboardButton(**kwargs)
+    btn = InlineKeyboardButton(text=text, callback_data=callback_data, url=url)
+    btn._style = style
+    return btn
 
-# ─── SMART SEND / EDIT WITH TOP IMAGE PREVIEW ──────────────────────────
-async def reply_ui(message, text: str, reply_markup: InlineKeyboardMarkup = None):
-    kwargs = {
+def serialize_markup(markup: InlineKeyboardMarkup) -> dict:
+    if not markup or not getattr(markup, "inline_keyboard", None):
+        return None
+    keyboard = []
+    for row in markup.inline_keyboard:
+        row_list = []
+        for btn in row:
+            b_dict = {"text": btn.text}
+            if getattr(btn, "callback_data", None):
+                b_dict["callback_data"] = btn.callback_data
+            if getattr(btn, "url", None):
+                b_dict["url"] = btn.url
+            if getattr(btn, "_style", None):
+                b_dict["style"] = btn._style
+            row_list.append(b_dict)
+        if row_list:
+            keyboard.append(row_list)
+    return {"inline_keyboard": keyboard}
+
+# ─── DIRECT TELEGRAM BOT API ENGINE (SUPPORTS COLORED BUTTONS & TOP PREVIEW)
+_http_session = None
+
+async def get_http_session() -> aiohttp.ClientSession:
+    global _http_session
+    if _http_session is None or _http_session.closed:
+        _http_session = aiohttp.ClientSession()
+    return _http_session
+
+class _ChatRef:
+    def __init__(self, chat_id: int):
+        self.id = chat_id
+
+class BotApiMessage:
+    def __init__(self, chat_id: int, message_id: int):
+        self.chat = _ChatRef(chat_id)
+        self.id = message_id
+
+    async def delete(self):
+        session = await get_http_session()
+        url = f"https://api.telegram.org/bot{TG_BOT_TOKEN}/deleteMessage"
+        try:
+            async with session.post(url, json={"chat_id": self.chat.id, "message_id": self.id}) as resp:
+                await resp.read()
+        except Exception:
+            pass
+
+async def send_ui(chat_id: int, text: str, reply_markup: InlineKeyboardMarkup = None, reply_to_message_id: int = None):
+    session = await get_http_session()
+    api_url = f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendMessage"
+    img_url = random.choice(IMAGES)
+
+    payload = {
+        "chat_id": chat_id,
         "text": text,
-        "reply_markup": reply_markup,
-        "parse_mode": ParseMode.HTML,
-        "disable_web_page_preview": False,
+        "parse_mode": "HTML",
+        "link_preview_options": {
+            "url": img_url,
+            "prefer_large_media": True,
+            "show_above_text": True
+        }
     }
-    if "invert_media" in inspect.signature(message.reply_text).parameters:
-        kwargs["invert_media"] = True
-    return await message.reply_text(**kwargs)
+    if reply_to_message_id:
+        payload["reply_parameters"] = {
+            "message_id": reply_to_message_id,
+            "allow_sending_without_reply": True
+        }
+    serialized_kb = serialize_markup(reply_markup)
+    if serialized_kb:
+        payload["reply_markup"] = serialized_kb
+
+    try:
+        async with session.post(api_url, json=payload) as resp:
+            data = await resp.json()
+            if data.get("ok"):
+                return BotApiMessage(chat_id, data["result"]["message_id"])
+            else:
+                print(f"BotAPI sendMessage warning: {data}")
+    except Exception as e:
+        print(f"BotAPI sendMessage exception: {e}")
+    return None
+
+async def reply_ui(message, text: str, reply_markup: InlineKeyboardMarkup = None):
+    chat_id = message.chat.id
+    reply_id = None
+    if getattr(message, "from_user", None) and not getattr(message.from_user, "is_self", False):
+        reply_id = message.id
+    res = await send_ui(chat_id, text, reply_markup=reply_markup, reply_to_message_id=reply_id)
+    if res:
+        return res
+    return await message.reply_text(text, reply_markup=reply_markup)
 
 async def edit_ui(message, text: str, reply_markup: InlineKeyboardMarkup = None):
-    kwargs = {
+    session = await get_http_session()
+    api_url = f"https://api.telegram.org/bot{TG_BOT_TOKEN}/editMessageText"
+    img_url = random.choice(IMAGES)
+
+    payload = {
+        "chat_id": message.chat.id,
+        "message_id": message.id,
         "text": text,
-        "reply_markup": reply_markup,
-        "parse_mode": ParseMode.HTML,
-        "disable_web_page_preview": False,
+        "parse_mode": "HTML",
+        "link_preview_options": {
+            "url": img_url,
+            "prefer_large_media": True,
+            "show_above_text": True
+        }
     }
-    if "invert_media" in inspect.signature(message.edit_text).parameters:
-        kwargs["invert_media"] = True
-    return await message.edit_text(**kwargs)
+    serialized_kb = serialize_markup(reply_markup)
+    if serialized_kb:
+        payload["reply_markup"] = serialized_kb
+
+    try:
+        async with session.post(api_url, json=payload) as resp:
+            data = await resp.json()
+            if data.get("ok"):
+                return BotApiMessage(message.chat.id, message.id)
+            else:
+                print(f"BotAPI editMessageText warning: {data}")
+    except Exception as e:
+        print(f"BotAPI editMessageText exception: {e}")
+    return None
 
 # ─── UI MESSAGE TEMPLATES (VIDEO STYLE DOUBLE QUOTE BLOCKS) ────────────
 def get_start_text() -> str:
     return (
-        f"{get_preview()}"
         f"<blockquote><b>➲ 𝗪𝗘𝗟𝗖𝗢𝗠𝗘 𝗧𝗢 𝗟𝗜𝗡𝗞𝗦𝗛𝗔𝗥𝗘</b></blockquote>\n"
         f"<blockquote>ʜᴇʏ, ᴅᴏɴ'ᴛ ᴏᴠᴇʀᴛʜɪɴᴋ ɪᴛ! ɪ'ᴠᴇ ɢᴏᴛ ᴛʜᴇ ʟɪɴᴋs ᴄᴏᴠᴇʀᴇᴅ. ʏᴏᴜ ᴊᴜsᴛ ᴇɴᴊᴏʏ ʏᴏᴜʀ ᴅᴀʏ!</blockquote>"
     )
 
 def get_about_text() -> str:
     return (
-        f"{get_preview()}"
         f"<blockquote><b>➲ 𝗔𝗕𝗢𝗨𝗧 𝗟𝗜𝗡𝗞𝗦𝗛𝗔𝗥𝗘</b></blockquote>\n"
         f"<blockquote>◍ ʙʀᴏᴡsᴇ ᴀ ᴍᴀɴᴀɢᴇᴅ ᴄʜᴀɴɴᴇʟ ᴅɪʀᴇᴄᴛᴏʀʏ ᴀɴᴅ ʀᴇᴄᴇɪᴠᴇ ᴛᴇᴍᴘᴏʀᴀʀʏ ɪɴᴠɪᴛᴇ ʟɪɴᴋs. "
         f"ʟɪɴᴋs ᴄᴀɴ ᴇxᴘɪʀᴇ ᴀᴜᴛᴏᴍᴀᴛɪᴄᴀʟʟʏ.\n\n"
@@ -88,25 +186,21 @@ def get_about_text() -> str:
 
 def get_help_text() -> str:
     return (
-        f"{get_preview()}"
         f"<blockquote><b>➲ 𝗟𝗜𝗡𝗞𝗦𝗛𝗔𝗥𝗘 𝗤𝗨𝗜𝗖𝗞 𝗚𝗨𝗜𝗗𝗘</b></blockquote>\n"
         f"<blockquote>◍ /start — ᴏᴘᴇɴ ʟɪɴᴋsʜᴀʀᴇ\n"
-        f"◍ /index — ʙʀᴏᴡsᴇ ᴛʜᴇ ᴄʜᴀɴɴᴇʟ ᴅɪʀᴇᴄᴛᴏʀʏ\n"
-        f"◍ /get &lt;ᴛɪᴛʟᴇ&gt; — ғɪɴᴅ ᴀ ᴄʜᴀɴɴᴇʟ\n"
+        f"◍ /get &lt;ᴛɪᴛʟᴇ&gt; — ғɪɴᴅ ᴀ ᴄʜᴀɴɴᴇʟ ʙʏ ɴᴀᴍᴇ\n"
         f"◍ ᴏᴘᴇɴ ᴀ sʜᴀʀᴇᴅ ʟɪɴᴋ ᴛᴏ ʀᴇᴄᴇɪᴠᴇ ᴀ ᴛᴇᴍᴘᴏʀᴀʀʏ ɪɴᴠɪᴛᴇ.</blockquote>"
     )
 
 def get_directory_text() -> str:
     return (
-        f"{get_preview()}"
         f"<blockquote><b>➲ 𝗖𝗛𝗔𝗡𝗡𝗘𝗟 𝗗𝗜𝗥𝗘𝗖𝗧𝗢𝗥𝗬 🔎</b></blockquote>\n"
-        f"<blockquote>◍ ᴜsᴇ /index ᴛᴏ ʙʀᴏᴡsᴇ ᴄʜᴀɴɴᴇʟs ʙʏ ɴᴀᴍᴇ.\n"
-        f"ᴏᴘᴇɴ ᴀ ᴄʜᴀɴɴᴇʟ ᴛᴏ ɢᴇᴛ ᴀ ᴛᴇᴍᴘᴏʀᴀʀʏ ɪɴᴠɪᴛᴇ ʟɪɴᴋ.</blockquote>"
+        f"<blockquote>◍ sᴇᴀʀᴄʜ ᴀɴʏ ᴄʜᴀɴɴᴇʟ ʙʏ ɴᴀᴍᴇ ᴛᴏ ɢᴇᴛ ᴀ ᴛᴇᴍᴘᴏʀᴀʀʏ ɪɴᴠɪᴛᴇ ʟɪɴᴋ.\n"
+        f"◍ ᴄʟɪᴄᴋ <b>sᴇᴀʀᴄʜ ᴄʜᴀɴɴᴇʟ</b> ʙᴇʟᴏᴡ ᴏʀ ᴜsᴇ <code>/get &lt;ɴᴀᴍᴇ&gt;</code>.</blockquote>"
     )
 
 def get_fsub_text() -> str:
     return (
-        f"{get_preview()}"
         f"<blockquote><b>➲ 𝗔𝗧𝗧𝗘𝗡𝗧𝗜𝗢𝗡 𝗥𝗘𝗤𝗨𝗜𝗥𝗘𝗗 🔒</b></blockquote>\n"
         f"<blockquote>◍ ᴇʜ? ʏᴏᴜ ʜᴀᴠᴇɴ'ᴛ ᴊᴏɪɴᴇᴅ ᴏᴜʀ ᴄʜᴀɴɴᴇʟs ʏᴇᴛ! ᴊᴏɪɴ ᴛʜᴇᴍ ʙᴇʟᴏᴡ ᴛᴏ ᴜɴʟᴏᴄᴋ ʏᴏᴜʀ ғɪʟᴇs ɪɴsᴛᴀɴᴛʟʏ~\n\n"
         f"<b>≡ 𝗥𝗘𝗤𝗨𝗜𝗥𝗘𝗠𝗘𝗡𝗧𝗦 :</b>\n"
@@ -116,7 +210,6 @@ def get_fsub_text() -> str:
 
 def get_leave_text(channel_title: str) -> str:
     return (
-        f"{get_preview()}"
         f"<blockquote><b>➲ 𝗖𝗛𝗔𝗡𝗡𝗘𝗟 𝗟𝗘𝗙𝗧 𝗪𝗔𝗥𝗡𝗜𝗡𝗚 ⚠️</b></blockquote>\n"
         f"<blockquote>◍ ʏᴏᴜ ᴊᴜsᴛ ʟᴇғᴛ <b>{channel_title}</b>!\n"
         f"◍ ᴘʟᴇᴀsᴇ ʀᴇᴊᴏɪɴ ᴛᴏ ᴋᴇᴇᴘ ʏᴏᴜʀ ᴀᴄᴄᴇss ᴛᴏ ᴏᴜʀ ʟɪɴᴋs ᴀɴᴅ ғɪʟᴇs ᴀᴄᴛɪᴠᴇ.</blockquote>"
@@ -126,7 +219,6 @@ def get_leave_text(channel_title: str) -> str:
 async def setup_bot_commands(client):
     commands = [
         BotCommand("start", "Open LinkShare"),
-        BotCommand("index", "Browse channel directory"),
         BotCommand("get", "Search a channel by name"),
         BotCommand("add_fsub", "Add Force Subscribe channel (Admin)"),
         BotCommand("del_fsub", "Remove Force Subscribe channel (Admin)"),
