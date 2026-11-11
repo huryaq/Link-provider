@@ -18,18 +18,21 @@ from database.database import (
     is_admin, add_admin, remove_admin, list_admins,
     add_fsub_channel, remove_fsub_channel, get_fsub_channels,
     get_channel_by_encoded_link, get_channel_by_encoded_link2,
-    get_original_link, get_fsub_mode, set_fsub_mode
+    get_original_link, get_fsub_mode, set_fsub_mode,
+    save_encoded_link, save_encoded_link2
 )
 from helper_func import get_readable_time
 from plugins.helpers import (
-    STICKERS, get_preview, sbtn, reply_ui, edit_ui,
+    STICKERS, sbtn, reply_ui, edit_ui, send_ui,
     get_start_text, get_about_text, get_help_text,
     get_directory_text, get_fsub_text, get_leave_text
 )
+from plugins.newpost import perform_channel_search
 
-# Broadcast state
+# Broadcast & Interactive Search states
 cancel_lock = asyncio.Lock()
 is_canceled = False
+waiting_for_search = set()
 
 # ─── MAIN START MENU KEYBOARD ───────────────────────────────────────────
 def get_main_keyboard() -> InlineKeyboardMarkup:
@@ -101,6 +104,7 @@ async def build_fsub_keyboard(client: Bot, unjoined_channels: list, payload: str
 @Bot.on_message(filters.command('start') & filters.private)
 async def start_command(client: Bot, message: Message):
     user_id = message.from_user.id
+    waiting_for_search.discard(user_id)
     await add_user(user_id)
 
     # 1. React on user's /start message
@@ -148,6 +152,22 @@ async def start_command(client: Bot, message: Message):
     start_msg = await reply_ui(message, get_start_text(), reply_markup=get_main_keyboard())
     asyncio.create_task(auto_delete(start_msg, 600))
 
+# ─── INTERACTIVE DIRECTORY SEARCH LISTENER ──────────────────────────────
+@Bot.on_message(filters.private & filters.text & ~filters.command([
+    'start', 'get', 'add_fsub', 'del_fsub', 'fsub_chnl', 'req',
+    'addch', 'setchannel', 'delch', 'delchannel', 'ch_links', 'reqlink',
+    'links', 'bulklink', 'genlink', 'channels', 'add_admin', 'remove_admin',
+    'list_admin', 'status', 'broadcast', 'cancel', 'stats', 'reqtime',
+    'reqmode', 'approveoff', 'approveon'
+]))
+async def interactive_search_listener(client: Bot, message: Message):
+    user_id = message.from_user.id
+    if user_id not in waiting_for_search:
+        return
+    waiting_for_search.discard(user_id)
+    query_str = message.text.strip()
+    await perform_channel_search(client, message, query_str)
+
 # ─── LINK GENERATOR & DELIVERY (100% TIMEZONE & OLD-LINK SAFE) ──────────
 async def deliver_channel_link(client: Bot, message: Message, payload: str):
     is_request = payload.startswith("req_")
@@ -167,7 +187,6 @@ async def deliver_channel_link(client: Bot, message: Message, payload: str):
     if not channel_id:
         return await reply_ui(
             message,
-            f"{get_preview()}"
             f"<blockquote><b>❌ 𝗜𝗡𝗩𝗔𝗟𝗜𝗗 𝗢𝗥 𝗘𝗫𝗣𝗜𝗥𝗘𝗗 𝗟𝗜𝗡𝗞</b></blockquote>\n"
             f"<blockquote>◍ ᴛʜɪs ʟɪɴᴋ ɪs ɪɴᴠᴀʟɪᴅ ᴏʀ ɴᴏ ʟᴏɴɢᴇʀ ᴀᴄᴛɪᴠᴇ.</blockquote>",
             reply_markup=close_btn
@@ -182,7 +201,6 @@ async def deliver_channel_link(client: Bot, message: Message, payload: str):
         ])
         return await reply_ui(
             message,
-            f"{get_preview()}"
             f"<blockquote><b>➲ 𝗟𝗜𝗡𝗞 𝗨𝗡𝗟𝗢𝗖𝗞𝗘𝗗 ⚡</b></blockquote>\n"
             f"<blockquote>◍ ʏᴏᴜʀ ᴘʀᴏᴛᴇᴄᴛᴇᴅ ʟɪɴᴋ ɪs ʀᴇᴀᴅʏ.\n"
             f"◍ ᴄʟɪᴄᴋ ᴛʜᴇ ʙᴜᴛᴛᴏɴ ʙᴇʟᴏᴡ ᴛᴏ ᴘʀᴏᴄᴇᴇᴅ.</blockquote>",
@@ -191,7 +209,6 @@ async def deliver_channel_link(client: Bot, message: Message, payload: str):
 
     try:
         chat = await client.get_chat(channel_id)
-        # Aware UTC timestamp (Never expires prematurely on any VPS timezone)
         expire_time = datetime.now(timezone.utc) + timedelta(minutes=5)
 
         try:
@@ -201,7 +218,6 @@ async def deliver_channel_link(client: Bot, message: Message, payload: str):
                 creates_join_request=is_request
             )
         except Exception:
-            # Fallback if channel is Public (doesn't allow join requests) or restricted
             invite = await client.create_chat_invite_link(
                 chat_id=channel_id,
                 expire_date=expire_time,
@@ -220,7 +236,6 @@ async def deliver_channel_link(client: Bot, message: Message, payload: str):
 
         sent = await reply_ui(
             message,
-            f"{get_preview()}"
             f"<blockquote><b>➲ 𝗧𝗘𝗠𝗣𝗢𝗥𝗔𝗥𝗬 𝗜𝗡𝗩𝗜𝗧𝗘 𝗥𝗘𝗔𝗗𝗬 ⚡</b></blockquote>\n"
             f"<blockquote>▸ <b>{chat.title}</b>\n"
             f"◍ ᴇxᴘɪʀᴇs ɪɴ: <code>5 ᴍɪɴᴜᴛᴇs</code>\n"
@@ -234,7 +249,6 @@ async def deliver_channel_link(client: Bot, message: Message, payload: str):
         print(f"Invite creation error for {channel_id}: {e}")
         await reply_ui(
             message,
-            f"{get_preview()}"
             f"<blockquote><b>❌ 𝗜𝗡𝗩𝗔𝗟𝗜𝗗 𝗢𝗥 𝗘𝗫𝗣𝗜𝗥𝗘𝗗 𝗟𝗜𝗡𝗞</b></blockquote>\n"
             f"<blockquote>◍ ᴜɴᴀʙʟᴇ ᴛᴏ ɢᴇɴᴇʀᴀᴛᴇ ɪɴᴠɪᴛᴇ ʟɪɴᴋ. ᴘʟᴇᴀsᴇ ᴍᴀᴋᴇ sᴜʀᴇ ᴛʜᴇ ʙᴏᴛ ʜᴀs <b>'Invite Users via Link'</b> ᴀᴅᴍɪɴ ᴘᴇʀᴍɪssɪᴏɴ ɪɴ ᴛʜᴇ ᴄʜᴀɴɴᴇʟ.</blockquote>",
             reply_markup=close_btn
@@ -271,11 +285,10 @@ async def fsub_leave_alert(client: Bot, update: ChatMemberUpdated):
                     [sbtn("• ʀᴇᴊᴏɪɴ ᴄʜᴀɴɴᴇʟ •", url=inv.invite_link, style="success")],
                     [sbtn("✖ ᴄʟᴏsᴇ", callback_data="close", style="danger")]
                 ])
-                await client.send_message(
+                await send_ui(
                     chat_id=user.id,
                     text=get_leave_text(update.chat.title),
-                    reply_markup=btn,
-                    parse_mode=ParseMode.HTML
+                    reply_markup=btn
                 )
             except Exception:
                 pass
@@ -290,7 +303,6 @@ async def add_fsub_handler(client: Bot, message: Message):
     if len(message.command) < 2:
         return await reply_ui(
             message,
-            f"{get_preview()}"
             f"<blockquote><b>➲ 𝗔𝗗𝗗 𝗙𝗦𝗨𝗕</b></blockquote>\n"
             f"<blockquote>◍ ᴜsᴀɢᴇ: <code>/add_fsub -100xxxxxxxxxx</code></blockquote>",
             reply_markup=close_btn
@@ -303,7 +315,6 @@ async def add_fsub_handler(client: Bot, message: Message):
     except Exception:
         return await reply_ui(
             message,
-            f"{get_preview()}"
             f"<blockquote><b>➲ 𝗘𝗥𝗥𝗢𝗥 ❌</b></blockquote>\n"
             f"<blockquote>◍ ɪɴᴠᴀʟɪᴅ ɪᴅ ᴏʀ ʙᴏᴛ ɪs ɴᴏᴛ ᴀᴅᴍɪɴ ɪɴ ᴛʜᴀᴛ ᴄʜᴀɴɴᴇʟ/ɢʀᴏᴜᴘ!</blockquote>",
             reply_markup=close_btn
@@ -312,7 +323,6 @@ async def add_fsub_handler(client: Bot, message: Message):
     await add_fsub_channel(channel_id)
     await reply_ui(
         message,
-        f"{get_preview()}"
         f"<blockquote><b>➲ 𝗙𝗦𝗨𝗕 𝗔𝗗𝗗𝗘𝗗</b></blockquote>\n"
         f"<blockquote>▸ <b>{channel_name}</b>\n"
         f"◍ ɪᴅ: <code>{channel_id}</code></blockquote>",
@@ -328,7 +338,6 @@ async def del_fsub_handler(client: Bot, message: Message):
     if len(message.command) < 2:
         return await reply_ui(
             message,
-            f"{get_preview()}"
             f"<blockquote><b>➲ 𝗥𝗘𝗠𝗢𝗩𝗘 𝗙𝗦𝗨𝗕</b></blockquote>\n"
             f"<blockquote>◍ ᴜsᴀɢᴇ: <code>/del_fsub -100xxxxxxxxxx</code></blockquote>",
             reply_markup=close_btn
@@ -346,7 +355,6 @@ async def del_fsub_handler(client: Bot, message: Message):
     if not removed:
         return await reply_ui(
             message,
-            f"{get_preview()}"
             f"<blockquote><b>➲ 𝗡𝗢𝗧 𝗙𝗢𝗨𝗡𝗗 ❌</b></blockquote>\n"
             f"<blockquote>◍ ɪᴅ: <code>{channel_id}</code> ɪs ɴᴏᴛ ɪɴ ғsᴜʙ ʟɪsᴛ.</blockquote>",
             reply_markup=close_btn
@@ -354,7 +362,6 @@ async def del_fsub_handler(client: Bot, message: Message):
 
     await reply_ui(
         message,
-        f"{get_preview()}"
         f"<blockquote><b>➲ 𝗙𝗦𝗨𝗕 𝗥𝗘𝗠𝗢𝗩𝗘𝗗</b></blockquote>\n"
         f"<blockquote>▸ <b>{channel_name}</b>\n"
         f"◍ ɪᴅ: <code>{channel_id}</code></blockquote>",
@@ -372,13 +379,12 @@ async def list_fsub_handler(client: Bot, message: Message):
     if not channels:
         return await reply_ui(
             message,
-            f"{get_preview()}"
             f"<blockquote><b>➲ 𝗖𝗛𝗔𝗡𝗡𝗘𝗟𝗦</b></blockquote>\n"
             f"<blockquote>◍ ɴᴏ ғsᴜʙ ᴄʜᴀɴɴᴇʟs ᴏʀ ɢʀᴏᴜᴘs ᴀᴅᴅᴇᴅ ʏᴇᴛ.</blockquote>",
             reply_markup=close_btn
         )
 
-    text = f"{get_preview()}<blockquote><b>➲ 𝗖𝗛𝗔𝗡𝗡𝗘𝗟𝗦</b></blockquote>\n"
+    text = f"<blockquote><b>➲ 𝗖𝗛𝗔𝗡𝗡𝗘𝗟𝗦</b></blockquote>\n"
     for ch_id in channels:
         try:
             chat = await client.get_chat(ch_id)
@@ -401,7 +407,6 @@ async def toggle_fsub_mode_cmd(client: Bot, message: Message):
     close_btn = InlineKeyboardMarkup([[sbtn("✖ ᴄʟᴏsᴇ", callback_data="close", style="danger")]])
     await reply_ui(
         message,
-        f"{get_preview()}"
         f"<blockquote><b>➲ 𝗙𝗦𝗨𝗕 𝗠𝗢𝗗𝗘 𝗨𝗣𝗗𝗔𝗧𝗘𝗗 ⚡</b></blockquote>\n"
         f"<blockquote>◍ ᴍᴏᴅᴇ: <code>{new_mode.upper()}</code>\n"
         f"◍ ʙᴜᴛᴛᴏɴ: <code>{'• ʀᴇǫᴜᴇsᴛ ᴛᴏ ᴊᴏɪɴ •' if new_mode == 'request' else '• ᴊᴏɪɴ ᴄʜᴀɴɴᴇʟ •'}</code></blockquote>",
@@ -418,7 +423,7 @@ async def add_admin_handler(client: Bot, message: Message):
     if len(message.command) < 2 or not message.command[1].isdigit():
         return await reply_ui(
             message,
-            f"{get_preview()}<blockquote><b>➲ 𝗔𝗗𝗗 𝗔𝗗𝗠𝗜𝗡</b></blockquote>\n"
+            f"<blockquote><b>➲ 𝗔𝗗𝗗 𝗔𝗗𝗠𝗜𝗡</b></blockquote>\n"
             f"<blockquote>◍ ᴜsᴀɢᴇ: <code>/add_admin &lt;user_id&gt;</code></blockquote>",
             reply_markup=close_btn
         )
@@ -427,7 +432,6 @@ async def add_admin_handler(client: Bot, message: Message):
     await add_admin(adm_id)
     await reply_ui(
         message,
-        f"{get_preview()}"
         f"<blockquote><b>➲ 𝗔𝗗𝗠𝗜𝗡 𝗔𝗗𝗗𝗘𝗗 ⚡</b></blockquote>\n"
         f"<blockquote>◍ ɪᴅ: <code>{adm_id}</code></blockquote>",
         reply_markup=close_btn
@@ -442,7 +446,7 @@ async def remove_admin_handler(client: Bot, message: Message):
     if len(message.command) < 2 or not message.command[1].isdigit():
         return await reply_ui(
             message,
-            f"{get_preview()}<blockquote><b>➲ 𝗥𝗘𝗠𝗢𝗩𝗘 𝗔𝗗𝗠𝗜𝗡</b></blockquote>\n"
+            f"<blockquote><b>➲ 𝗥𝗘𝗠𝗢𝗩𝗘 𝗔𝗗𝗠𝗜𝗡</b></blockquote>\n"
             f"<blockquote>◍ ᴜsᴀɢᴇ: <code>/remove_admin &lt;user_id&gt;</code></blockquote>",
             reply_markup=close_btn
         )
@@ -451,7 +455,6 @@ async def remove_admin_handler(client: Bot, message: Message):
     await remove_admin(adm_id)
     await reply_ui(
         message,
-        f"{get_preview()}"
         f"<blockquote><b>➲ 𝗔𝗗𝗠𝗜𝗡 𝗥𝗘𝗠𝗢𝗩𝗘𝗗</b></blockquote>\n"
         f"<blockquote>◍ ɪᴅ: <code>{adm_id}</code></blockquote>",
         reply_markup=close_btn
@@ -465,7 +468,7 @@ async def list_admin_handler(client: Bot, message: Message):
     admins = await list_admins()
     close_btn = InlineKeyboardMarkup([[sbtn("✖ ᴄʟᴏsᴇ", callback_data="close", style="danger")]])
 
-    text = f"{get_preview()}<blockquote><b>➲ 𝗔𝗗𝗠𝗜𝗡𝗦 𝗟𝗜𝗦𝗧</b></blockquote>\n"
+    text = f"<blockquote><b>➲ 𝗔𝗗𝗠𝗜𝗡𝗦 𝗟𝗜𝗦𝗧</b></blockquote>\n"
     for adm_id in admins:
         text += f"<blockquote>▸ ᴀᴅᴍɪɴ\nɪᴅ: <code>{adm_id}</code></blockquote>\n"
 
@@ -488,7 +491,6 @@ async def status_handler(client: Bot, message: Message):
 
     await edit_ui(
         temp,
-        f"{get_preview()}"
         f"<blockquote><b>➲ 𝗦𝗬𝗦𝗧𝗘𝗠 𝗦𝗧𝗔𝗧𝗨𝗦 ⚡</b></blockquote>\n"
         f"<blockquote>◍ <b>ᴜsᴇʀs:</b> <code>{total_users}</code>\n"
         f"◍ <b>ᴜᴘᴛɪᴍᴇ:</b> <code>{uptime_str}</code>\n"
@@ -515,7 +517,6 @@ async def broadcast_handler(client: Bot, message: Message):
     if not message.reply_to_message:
         return await reply_ui(
             message,
-            f"{get_preview()}"
             f"<blockquote><b>➲ 𝗕𝗥𝗢𝗔𝗗𝗖𝗔𝗦𝗧 𝗚𝗨𝗜𝗗𝗘</b></blockquote>\n"
             f"<blockquote>◍ ʀᴇᴘʟʏ ᴛᴏ ᴀ ᴍᴇssᴀɢᴇ ᴡɪᴛʜ:\n"
             f"▸ <code>/broadcast</code>\n"
@@ -547,8 +548,8 @@ async def broadcast_handler(client: Bot, message: Message):
 
     pls_wait = await reply_ui(
         message,
-        f"{get_preview()}<blockquote><b>➲ 𝗕𝗥𝗢𝗔𝗗𝗖𝗔𝗦𝗧𝗜𝗡𝗚... ⚡</b></blockquote>\n"
-        f"<blockquote>◍ sᴇɴᴅᴅɪɴɢ ᴛᴏ <code>{total}</code> ᴜsᴇʀs...</blockquote>"
+        f"<blockquote><b>➲ 𝗕𝗥𝗢𝗔𝗗𝗖𝗔𝗦𝗧𝗜𝗡𝗚... ⚡</b></blockquote>\n"
+        f"<blockquote>◍ sᴇɴᴅɪɴɢ ᴛᴏ <code>{total}</code> ᴜsᴇʀs...</blockquote>"
     )
 
     for i, chat_id in enumerate(query, start=1):
@@ -556,7 +557,7 @@ async def broadcast_handler(client: Bot, message: Message):
             if is_canceled:
                 return await edit_ui(
                     pls_wait,
-                    f"{get_preview()}<blockquote><b>➲ 𝗕𝗥𝗢𝗔𝗗𝗖𝗔𝗦𝗧 𝗖𝗔𝗡𝗖𝗘𝗟𝗟𝗘𝗗 ❌</b></blockquote>",
+                    f"<blockquote><b>➲ 𝗕𝗥𝗢𝗔𝗗𝗖𝗔𝗦𝗧 𝗖𝗔𝗡𝗖𝗘𝗟𝗟𝗘𝗗 ❌</b></blockquote>",
                     reply_markup=close_btn
                 )
         try:
@@ -584,7 +585,6 @@ async def broadcast_handler(client: Bot, message: Message):
 
     await edit_ui(
         pls_wait,
-        f"{get_preview()}"
         f"<blockquote><b>➲ 𝗕𝗥𝗢𝗔𝗗𝗖𝗔𝗦𝗧 𝗖𝗢𝗠𝗣𝗟𝗘𝗧𝗘𝗗 ✅</b></blockquote>\n"
         f"<blockquote>◍ <b>ᴛᴏᴛᴀʟ:</b> <code>{total}</code>\n"
         f"◍ <b>sᴜᴄᴄᴇss:</b> <code>{successful}</code>\n"
@@ -601,6 +601,7 @@ async def cb_handler(client: Bot, query: CallbackQuery):
     user_id = query.from_user.id
 
     if data == "close":
+        waiting_for_search.discard(user_id)
         await query.answer()
         try:
             await query.message.delete()
@@ -613,6 +614,7 @@ async def cb_handler(client: Bot, query: CallbackQuery):
             pass
 
     elif data == "about":
+        waiting_for_search.discard(user_id)
         await query.answer()
         markup = InlineKeyboardMarkup([
             [
@@ -623,9 +625,10 @@ async def cb_handler(client: Bot, query: CallbackQuery):
         await edit_ui(query.message, get_about_text(), reply_markup=markup)
 
     elif data == "directory":
+        waiting_for_search.discard(user_id)
         await query.answer()
         markup = InlineKeyboardMarkup([
-            [sbtn("🔎 ʙʀᴏᴡsᴇ ᴄʜᴀɴɴᴇʟs", callback_data="reqpage_0", style="success")],
+            [sbtn("🔎 sᴇᴀʀᴄʜ ᴄʜᴀɴɴᴇʟ", callback_data="search_ch", style="success")],
             [
                 sbtn("‹ ʙᴀᴄᴋ", callback_data="start", style="primary"),
                 sbtn("✖ ᴄʟᴏsᴇ", callback_data="close", style="danger")
@@ -633,7 +636,46 @@ async def cb_handler(client: Bot, query: CallbackQuery):
         ])
         await edit_ui(query.message, get_directory_text(), reply_markup=markup)
 
+    elif data == "search_ch":
+        waiting_for_search.add(user_id)
+        await query.answer("Type channel name in chat!", show_alert=False)
+        markup = InlineKeyboardMarkup([
+            [
+                sbtn("‹ ʙᴀᴄᴋ", callback_data="directory", style="primary"),
+                sbtn("✖ ᴄʟᴏsᴇ", callback_data="close", style="danger")
+            ]
+        ])
+        await edit_ui(
+            query.message,
+            f"<blockquote><b>➲ 𝗦𝗘𝗔𝗥𝗖𝗛 𝗖𝗛𝗔𝗡𝗡𝗘𝗟 🔎</b></blockquote>\n"
+            f"<blockquote>◍ ᴘʟᴇᴀsᴇ <b>ᴛʏᴘᴇ ᴀɴᴅ sᴇɴᴅ</b> ᴛʜᴇ ᴄʜᴀɴɴᴇʟ ɴᴀᴍᴇ ɪɴ ᴄʜᴀᴛ ɴᴏᴡ!\n"
+            f"◍ ᴇxᴀᴍᴘʟᴇ: <code>naruto</code> ᴏʀ <code>hellfire</code></blockquote>",
+            reply_markup=markup
+        )
+
+    elif data.startswith("getch_"):
+        waiting_for_search.discard(user_id)
+        await query.answer("⚡ Generating invite link...", show_alert=False)
+        ch_id = int(data.split("_", 1)[1])
+
+        is_joined, unjoined = await check_user_fsub(client, user_id)
+        code = await save_encoded_link(ch_id)
+        await save_encoded_link2(ch_id, code)
+        mode = await get_fsub_mode()
+        payload = f"req_{code}" if mode == "request" else code
+
+        if not is_joined:
+            fsub_markup = await build_fsub_keyboard(client, unjoined, payload)
+            return await edit_ui(query.message, get_fsub_text(), reply_markup=fsub_markup)
+
+        try:
+            await query.message.delete()
+        except Exception:
+            pass
+        await deliver_channel_link(client, query.message, payload)
+
     elif data == "help":
+        waiting_for_search.discard(user_id)
         await query.answer()
         markup = InlineKeyboardMarkup([
             [
@@ -644,6 +686,7 @@ async def cb_handler(client: Bot, query: CallbackQuery):
         await edit_ui(query.message, get_help_text(), reply_markup=markup)
 
     elif data in ["start", "home"]:
+        waiting_for_search.discard(user_id)
         await query.answer()
         await edit_ui(query.message, get_start_text(), reply_markup=get_main_keyboard())
 
@@ -680,7 +723,7 @@ async def cb_handler(client: Bot, query: CallbackQuery):
             pass
         await deliver_channel_link(client, query.message, payload)
 
-async def auto_delete(msg: Message, delay: int):
+async def auto_delete(msg, delay: int):
     await asyncio.sleep(delay)
     try:
         await msg.delete()
