@@ -13,6 +13,55 @@ from plugins.helpers import sbtn, reply_ui, edit_ui, normalize_text
 
 PAGE_SIZE = 6
 
+# ─── IN-MEMORY RAM INDEX FOR SUB-MILLISECOND /get SEARCH ───────────────
+# Structure: {channel_id: {"title": str, "norm": str, "words": set}}
+_CHANNEL_INDEX = {}
+_INDEX_INITIALIZED = False
+_INDEX_LOCK = asyncio.Lock()
+
+def update_ram_index(channel_id: int, title: str):
+    if not title:
+        return
+    norm = normalize_text(title)
+    _CHANNEL_INDEX[int(channel_id)] = {
+        "title": title,
+        "norm": norm,
+        "words": set(norm.split())
+    }
+
+def remove_from_ram_index(channel_id: int):
+    _CHANNEL_INDEX.pop(int(channel_id), None)
+
+async def ensure_ram_index(client: Bot):
+    global _INDEX_INITIALIZED
+    if _INDEX_INITIALIZED and _CHANNEL_INDEX:
+        return
+    async with _INDEX_LOCK:
+        if _INDEX_INITIALIZED and _CHANNEL_INDEX:
+            return
+        try:
+            docs = await channels_collection.find({"status": "active"}).to_list(None)
+            for doc in docs:
+                ch_id = doc.get("channel_id")
+                if not ch_id or doc.get("original_link"):
+                    continue
+                title = doc.get("title")
+                if not title:
+                    try:
+                        chat = await client.get_chat(ch_id)
+                        title = chat.title
+                        await channels_collection.update_one(
+                            {"channel_id": ch_id},
+                            {"$set": {"title": title}},
+                            upsert=True
+                        )
+                    except Exception:
+                        continue
+                update_ram_index(ch_id, title)
+            _INDEX_INITIALIZED = True
+        except Exception as e:
+            print(f"RAM index init error: {e}")
+
 # Kept for backward compatibility
 async def revoke_invite_after_5_minutes(client: Bot, channel_id: int, link: str, is_request: bool = False):
     await asyncio.sleep(300)
@@ -21,94 +70,58 @@ async def revoke_invite_after_5_minutes(client: Bot, channel_id: int, link: str,
     except Exception:
         pass
 
-# ─── SMART SEARCH ENGINE FOR /get AND DIRECTORY ────────────────────────
-async def perform_channel_search(client: Bot, message: Message, raw_query: str):
-    close_btn = InlineKeyboardMarkup([
-        [
-            sbtn("🔎 sᴇᴀʀᴄʜ ᴀɢᴀɪɴ", callback_data="search_ch", style="primary"),
-            sbtn("✖ ᴄʟᴏsᴇ", callback_data="close", style="danger")
-        ]
-    ])
+# ─── EXTREME FAST /get SEARCH (ONLY VIA /get COMMAND) ──────────────────
+@Bot.on_message(filters.command('get') & filters.private)
+async def search_channel_cmd(client: Bot, message: Message):
+    close_btn = InlineKeyboardMarkup([[sbtn("✖ ᴄʟᴏsᴇ", callback_data="close", style="danger")]])
+
+    if len(message.command) < 2:
+        return await reply_ui(
+            message,
+            f"<blockquote><b>➲ 𝗙𝗜𝗡𝗗 𝗖𝗛𝗔𝗡𝗡𝗘𝗟 🔎</b></blockquote>\n"
+            f"<blockquote>◍ ᴜsᴀɢᴇ: <code>/get &lt;ᴛɪᴛʟᴇ&gt;</code>\n"
+            f"◍ ᴇxᴀᴍᴘʟᴇ: <code>/get naruto</code></blockquote>",
+            reply_markup=close_btn
+        )
+
+    raw_query = " ".join(message.command[1:]).strip()
     query_norm = normalize_text(raw_query)
     if not query_norm:
         return await reply_ui(
             message,
-            f"<blockquote><b>➲ 𝗦𝗘𝗔𝗥𝗖𝗛 𝗖𝗛𝗔𝗡𝗡𝗘𝗟 🔎</b></blockquote>\n"
+            f"<blockquote><b>➲ 𝗜𝗡𝗩𝗔𝗟𝗜𝗗 𝗤𝗨𝗘𝗥𝗬 ⚠️</b></blockquote>\n"
             f"<blockquote>◍ ᴘʟᴇᴀsᴇ ᴇɴᴛᴇʀ ᴀ ᴠᴀʟɪᴅ ᴄʜᴀɴɴᴇʟ ɴᴀᴍᴇ.</blockquote>",
             reply_markup=close_btn
         )
 
-    channels = await get_channels()
-    if not channels:
-        return await reply_ui(
-            message,
-            f"<blockquote><b>➲ 𝗡𝗢 𝗖𝗛𝗔𝗡𝗡𝗘𝗟𝗦 𝗙𝗢𝗨𝗡𝗗 ❌</b></blockquote>\n"
-            f"<blockquote>◍ ɴᴏ ᴄʜᴀɴɴᴇʟs ᴀʀᴇ ʀᴇɢɪsᴛᴇʀᴇᴅ ɪɴ ᴛʜᴇ ᴅɪʀᴇᴄᴛᴏʀʏ ʏᴇᴛ.</blockquote>",
-            reply_markup=close_btn
-        )
+    await ensure_ram_index(client)
 
-    matched_buttons = []
     query_words = query_norm.split()
+    matched_buttons = []
 
-    for ch_id in channels:
-        try:
-            doc = await channels_collection.find_one({"channel_id": ch_id})
-            title = doc.get("title") if doc else None
-            if not title:
-                chat = await client.get_chat(ch_id)
-                title = chat.title
-                await channels_collection.update_one(
-                    {"channel_id": ch_id},
-                    {"$set": {"title": title}},
-                    upsert=True
-                )
-
-            title_norm = normalize_text(title)
-            if query_norm in title_norm or all(w in title_norm for w in query_words):
-                matched_buttons.append([sbtn(f"▸ {title}", callback_data=f"getch_{ch_id}", style="success")])
-        except Exception:
-            pass
+    # 0.1ms Pure RAM Search (Zero DB / API lag!)
+    for ch_id, info in _CHANNEL_INDEX.items():
+        t_norm = info["norm"]
+        if query_norm in t_norm or all( any(qw in tw for tw in info["words"]) for qw in query_words ):
+            matched_buttons.append([sbtn(f"▸ {info['title']}", callback_data=f"getch_{ch_id}", style="success")])
+            if len(matched_buttons) >= 12:
+                break
 
     if not matched_buttons:
         return await reply_ui(
             message,
             f"<blockquote><b>➲ 𝗡𝗢 𝗥𝗘𝗦𝗨𝗟𝗧𝗦 𝗙𝗢𝗨𝗡𝗗 ❌</b></blockquote>\n"
-            f"<blockquote>◍ ɴᴏ ᴄʜᴀɴɴᴇʟ ᴍᴀᴛᴄʜᴇᴅ: <code>{raw_query}</code>\n"
-            f"◍ ᴛʀʏ ᴀ ᴅɪғғᴇʀᴇɴᴛ ᴋᴇʏᴡᴏʀᴅ.</blockquote>",
+            f"<blockquote>◍ ɴᴏ ᴄʜᴀɴɴᴇʟ ᴍᴀᴛᴄʜᴇᴅ: <code>{raw_query}</code></blockquote>",
             reply_markup=close_btn
         )
 
-    matched_buttons.append([
-        sbtn("🔎 sᴇᴀʀᴄʜ ᴀɢᴀɪɴ", callback_data="search_ch", style="primary"),
-        sbtn("✖ ᴄʟᴏsᴇ", callback_data="close", style="danger")
-    ])
-
+    matched_buttons.append([sbtn("✖ ᴄʟᴏsᴇ", callback_data="close", style="danger")])
     await reply_ui(
         message,
         f"<blockquote><b>➲ 𝗦𝗘𝗔𝗥𝗖𝗛 𝗥𝗘𝗦𝗨𝗟𝗧𝗦 🔎</b></blockquote>\n"
-        f"<blockquote>◍ ғᴏᴜɴᴅ <code>{len(matched_buttons) - 1}</code> ᴍᴀᴛᴄʜɪɴɢ ᴄʜᴀɴɴᴇʟ(s) ғᴏʀ <code>{raw_query}</code>.\n"
-        f"◍ ᴄʟɪᴄᴋ ᴀɴʏ ᴄʜᴀɴɴᴇʟ ʙᴇʟᴏᴡ ᴛᴏ ɢᴇᴛ ᴀɴ ɪɴsᴛᴀɴᴛ ɪɴᴠɪᴛᴇ ʟɪɴᴋ:</blockquote>",
-        reply_markup=InlineKeyboardMarkup(matched_buttons[:15])
+        f"<blockquote>◍ sᴇʟᴇᴄᴛ ᴀ ᴄʜᴀɴɴᴇʟ ʙᴇʟᴏᴡ ᴛᴏ ɢᴇᴛ ᴀ ᴛᴇᴍᴘᴏʀᴀʀʏ ɪɴᴠɪᴛᴇ ʟɪɴᴋ:</blockquote>",
+        reply_markup=InlineKeyboardMarkup(matched_buttons)
     )
-
-# ─── /get COMMAND ──────────────────────────────────────────────────────
-@Bot.on_message(filters.command('get') & filters.private)
-async def search_channel_cmd(client: Bot, message: Message):
-    if len(message.command) < 2:
-        markup = InlineKeyboardMarkup([
-            [sbtn("🔎 ᴛʏᴘᴇ ᴄʜᴀɴɴᴇʟ ɴᴀᴍᴇ", callback_data="search_ch", style="success")],
-            [sbtn("✖ ᴄʟᴏsᴇ", callback_data="close", style="danger")]
-        ])
-        return await reply_ui(
-            message,
-            f"<blockquote><b>➲ 𝗙𝗜𝗡𝗗 𝗔 𝗖𝗛𝗔𝗡𝗡𝗘𝗟 🔎</b></blockquote>\n"
-            f"<blockquote>◍ ᴜsᴀɢᴇ: <code>/get &lt;ᴄʜᴀɴɴᴇʟ ɴᴀᴍᴇ&gt;</code>\n"
-            f"◍ ᴏʀ ᴄʟɪᴄᴋ ᴛʜᴇ ʙᴜᴛᴛᴏɴ ʙᴇʟᴏᴡ ᴛᴏ sᴇᴀʀᴄʜ ᴅɪʀᴇᴄᴛʟʏ!</blockquote>",
-            reply_markup=markup
-        )
-
-    raw_query = " ".join(message.command[1:]).strip()
-    await perform_channel_search(client, message, raw_query)
 
 # ─── ADD CHANNEL (/addch) ──────────────────────────────────────────────
 @Bot.on_message(filters.command(['addch', 'setchannel']) & is_owner_or_admin)
@@ -132,6 +145,8 @@ async def set_channel(client: Bot, message: Message):
             {"$set": {"title": chat.title}},
             upsert=True
         )
+        update_ram_index(channel_id, chat.title)
+
         base64_invite = await save_encoded_link(channel_id)
         await save_encoded_link2(channel_id, base64_invite)
 
@@ -179,6 +194,7 @@ async def del_channel(client: Bot, message: Message):
         )
 
     await delete_channel(channel_id)
+    remove_from_ram_index(channel_id)
     return await reply_ui(
         message,
         f"<blockquote><b>➲ 𝗖𝗛𝗔𝗡𝗡𝗘𝗟 𝗥𝗘𝗠𝗢𝗩𝗘𝗗</b></blockquote>\n"
@@ -209,8 +225,12 @@ async def send_channel_page(client, message, channels, page, edit=False):
         try:
             base64_invite = await save_encoded_link(channel_id)
             button_link = f"https://t.me/{client.username}?start={base64_invite}"
-            chat = await client.get_chat(channel_id)
-            row.append(sbtn(f"▸ {chat.title}", url=button_link, style="primary"))
+            title = _CHANNEL_INDEX.get(channel_id, {}).get("title")
+            if not title:
+                chat = await client.get_chat(channel_id)
+                title = chat.title
+                update_ram_index(channel_id, title)
+            row.append(sbtn(f"▸ {title}", url=button_link, style="primary"))
             if len(row) == 2:
                 buttons.append(row)
                 row = []
@@ -267,8 +287,12 @@ async def send_request_page(client, message, channels, page, edit=False):
             code = await save_encoded_link(channel_id)
             await save_encoded_link2(channel_id, code)
             button_link = f"https://t.me/{client.username}?start=req_{code}"
-            chat = await client.get_chat(channel_id)
-            row.append(sbtn(f"▸ {chat.title}", url=button_link, style="primary"))
+            title = _CHANNEL_INDEX.get(channel_id, {}).get("title")
+            if not title:
+                chat = await client.get_chat(channel_id)
+                title = chat.title
+                update_ram_index(channel_id, title)
+            row.append(sbtn(f"▸ {title}", url=button_link, style="primary"))
             if len(row) == 2:
                 buttons.append(row)
                 row = []
@@ -322,18 +346,22 @@ async def send_links_page(client, message, channels, page, edit=False):
     links_text = f"<blockquote><b>➲ 𝗔𝗟𝗟 𝗖𝗛𝗔𝗡𝗡𝗘𝗟 𝗟𝗜𝗡𝗞𝗦</b></blockquote>\n"
     for i, channel_id in enumerate(channels[start_idx:end_idx], start=start_idx + 1):
         try:
-            chat = await client.get_chat(channel_id)
-            await channels_collection.update_one(
-                {"channel_id": channel_id},
-                {"$set": {"title": chat.title}},
-                upsert=True
-            )
+            title = _CHANNEL_INDEX.get(channel_id, {}).get("title")
+            if not title:
+                chat = await client.get_chat(channel_id)
+                title = chat.title
+                update_ram_index(channel_id, title)
+                await channels_collection.update_one(
+                    {"channel_id": channel_id},
+                    {"$set": {"title": title}},
+                    upsert=True
+                )
             code = await save_encoded_link(channel_id)
             await save_encoded_link2(channel_id, code)
             normal_link = f"https://t.me/{client.username}?start={code}"
             request_link = f"https://t.me/{client.username}?start=req_{code}"
             links_text += (
-                f"<blockquote>▸ <b>{i}. {chat.title}</b>\n"
+                f"<blockquote>▸ <b>{i}. {title}</b>\n"
                 f"◍ ɪᴅ: <code>{channel_id}</code>\n"
                 f"◍ ɴᴏʀᴍᴀʟ: <code>{normal_link}</code>\n"
                 f"◍ ʀᴇǫᴜᴇsᴛ: <code>{request_link}</code></blockquote>\n"
@@ -388,6 +416,7 @@ async def bulk_link(client: Bot, message: Message):
                 {"$set": {"title": chat.title}},
                 upsert=True
             )
+            update_ram_index(channel_id, chat.title)
             code = await save_encoded_link(channel_id)
             await save_encoded_link2(channel_id, code)
             normal_link = f"https://t.me/{client.username}?start={code}"
@@ -462,8 +491,12 @@ async def send_channel_ids_page(client, message, channels, page, edit=False):
     text = f"<blockquote><b>➲ 𝗖𝗢𝗡𝗡𝗘𝗖𝗧𝗘𝗗 𝗖𝗛𝗔𝗡𝗡𝗘𝗟𝗦</b></blockquote>\n"
     for idx, channel_id in enumerate(channels[start_idx:end_idx], start=start_idx + 1):
         try:
-            chat = await client.get_chat(channel_id)
-            text += f"<blockquote>▸ <b>{idx}. {chat.title}</b>\n◍ ɪᴅ: <code>{channel_id}</code></blockquote>\n"
+            title = _CHANNEL_INDEX.get(channel_id, {}).get("title")
+            if not title:
+                chat = await client.get_chat(channel_id)
+                title = chat.title
+                update_ram_index(channel_id, title)
+            text += f"<blockquote>▸ <b>{idx}. {title}</b>\n◍ ɪᴅ: <code>{channel_id}</code></blockquote>\n"
         except Exception:
             text += f"<blockquote>▸ <b>{idx}. ᴜɴᴋɴᴏᴡɴ</b>\n◍ ɪᴅ: <code>{channel_id}</code></blockquote>\n"
 
