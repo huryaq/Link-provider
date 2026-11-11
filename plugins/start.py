@@ -1,7 +1,7 @@
 import asyncio
 import random
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pyrogram import Client, filters
 from pyrogram.enums import ParseMode, ChatMemberStatus
 from pyrogram.types import (
@@ -70,12 +70,20 @@ async def build_fsub_keyboard(client: Bot, unjoined_channels: list, payload: str
     row = []
     for ch_id in unjoined_channels:
         try:
-            chat = await client.get_chat(ch_id)
-            link_obj = await client.create_chat_invite_link(
-                chat_id=ch_id,
-                creates_join_request=(mode == "request")
-            )
-            row.append(sbtn(btn_label, url=link_obj.invite_link, style="primary"))
+            try:
+                link_obj = await client.create_chat_invite_link(
+                    chat_id=ch_id,
+                    creates_join_request=(mode == "request")
+                )
+                inv_url = link_obj.invite_link
+            except Exception:
+                link_obj = await client.create_chat_invite_link(
+                    chat_id=ch_id,
+                    creates_join_request=False
+                )
+                inv_url = link_obj.invite_link
+
+            row.append(sbtn(btn_label, url=inv_url, style="primary"))
             if len(row) == 2:
                 keyboard.append(row)
                 row = []
@@ -140,15 +148,19 @@ async def start_command(client: Bot, message: Message):
     start_msg = await reply_ui(message, get_start_text(), reply_markup=get_main_keyboard())
     asyncio.create_task(auto_delete(start_msg, 600))
 
-# ─── LINK GENERATOR & DELIVERY (100% EXPIRY BUG FIXED) ──────────────────
+# ─── LINK GENERATOR & DELIVERY (100% TIMEZONE & OLD-LINK SAFE) ──────────
 async def deliver_channel_link(client: Bot, message: Message, payload: str):
     is_request = payload.startswith("req_")
-    clean_code = payload[4:] if is_request else payload
+    clean_code = payload[4:].strip() if is_request else payload.strip()
 
     if is_request:
         channel_id = await get_channel_by_encoded_link2(clean_code)
+        if not channel_id:
+            channel_id = await get_channel_by_encoded_link(clean_code)
     else:
         channel_id = await get_channel_by_encoded_link(clean_code)
+        if not channel_id:
+            channel_id = await get_channel_by_encoded_link2(clean_code)
 
     close_btn = InlineKeyboardMarkup([[sbtn("✖ ᴄʟᴏsᴇ", callback_data="close", style="danger")]])
 
@@ -179,12 +191,23 @@ async def deliver_channel_link(client: Bot, message: Message, payload: str):
 
     try:
         chat = await client.get_chat(channel_id)
-        # Create fresh isolated invite link valid for 5 minutes (UTC)
-        invite = await client.create_chat_invite_link(
-            chat_id=channel_id,
-            expire_date=datetime.utcnow() + timedelta(minutes=5),
-            creates_join_request=is_request
-        )
+        # Aware UTC timestamp (Never expires prematurely on any VPS timezone)
+        expire_time = datetime.now(timezone.utc) + timedelta(minutes=5)
+
+        try:
+            invite = await client.create_chat_invite_link(
+                chat_id=channel_id,
+                expire_date=expire_time,
+                creates_join_request=is_request
+            )
+        except Exception:
+            # Fallback if channel is Public (doesn't allow join requests) or restricted
+            invite = await client.create_chat_invite_link(
+                chat_id=channel_id,
+                expire_date=expire_time,
+                creates_join_request=False
+            )
+            is_request = False
 
         join_label = "• ʀᴇǫᴜᴇsᴛ ᴛᴏ ᴊᴏɪɴ •" if is_request else "• ᴊᴏɪɴ ᴄʜᴀɴɴᴇʟ •"
         markup = InlineKeyboardMarkup([
@@ -213,7 +236,7 @@ async def deliver_channel_link(client: Bot, message: Message, payload: str):
             message,
             f"{get_preview()}"
             f"<blockquote><b>❌ 𝗜𝗡𝗩𝗔𝗟𝗜𝗗 𝗢𝗥 𝗘𝗫𝗣𝗜𝗥𝗘𝗗 𝗟𝗜𝗡𝗞</b></blockquote>\n"
-            f"<blockquote>◍ ᴜɴᴀʙʟᴇ ᴛᴏ ɢᴇɴᴇʀᴀᴛᴇ ɪɴᴠɪᴛᴇ ʟɪɴᴋ. ʙᴏᴛ ᴍᴜsᴛ ʙᴇ ᴀᴅᴍɪɴ ɪɴ ᴛʜᴇ ᴄʜᴀɴɴᴇʟ.</blockquote>",
+            f"<blockquote>◍ ᴜɴᴀʙʟᴇ ᴛᴏ ɢᴇɴᴇʀᴀᴛᴇ ɪɴᴠɪᴛᴇ ʟɪɴᴋ. ᴘʟᴇᴀsᴇ ᴍᴀᴋᴇ sᴜʀᴇ ᴛʜᴇ ʙᴏᴛ ʜᴀs <b>'Invite Users via Link'</b> ᴀᴅᴍɪɴ ᴘᴇʀᴍɪssɪᴏɴ ɪɴ ᴛʜᴇ ᴄʜᴀɴɴᴇʟ.</blockquote>",
             reply_markup=close_btn
         )
 
@@ -234,10 +257,16 @@ async def fsub_leave_alert(client: Bot, update: ChatMemberUpdated):
                 return
             try:
                 mode = await get_fsub_mode()
-                inv = await client.create_chat_invite_link(
-                    chat_id=update.chat.id,
-                    creates_join_request=(mode == "request")
-                )
+                try:
+                    inv = await client.create_chat_invite_link(
+                        chat_id=update.chat.id,
+                        creates_join_request=(mode == "request")
+                    )
+                except Exception:
+                    inv = await client.create_chat_invite_link(
+                        chat_id=update.chat.id,
+                        creates_join_request=False
+                    )
                 btn = InlineKeyboardMarkup([
                     [sbtn("• ʀᴇᴊᴏɪɴ ᴄʜᴀɴɴᴇʟ •", url=inv.invite_link, style="success")],
                     [sbtn("✖ ᴄʟᴏsᴇ", callback_data="close", style="danger")]
@@ -519,7 +548,7 @@ async def broadcast_handler(client: Bot, message: Message):
     pls_wait = await reply_ui(
         message,
         f"{get_preview()}<blockquote><b>➲ 𝗕𝗥𝗢𝗔𝗗𝗖𝗔𝗦𝗧𝗜𝗡𝗚... ⚡</b></blockquote>\n"
-        f"<blockquote>◍ sᴇɴᴅɪɴɢ ᴛᴏ <code>{total}</code> ᴜsᴇʀs...</blockquote>"
+        f"<blockquote>◍ sᴇɴᴅᴅɪɴɢ ᴛᴏ <code>{total}</code> ᴜsᴇʀs...</blockquote>"
     )
 
     for i, chat_id in enumerate(query, start=1):
@@ -651,4 +680,9 @@ async def cb_handler(client: Bot, query: CallbackQuery):
             pass
         await deliver_channel_link(client, query.message, payload)
 
-async def auto_delete(msg: Message, delay: int)
+async def auto_delete(msg: Message, delay: int):
+    await asyncio.sleep(delay)
+    try:
+        await msg.delete()
+    except Exception:
+        pass
