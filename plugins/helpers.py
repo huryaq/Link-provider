@@ -29,10 +29,12 @@ def get_preview() -> str:
     return ""
 
 # ─── ULTRA-FAST UNICODE & SMALL-CAPS NORMALIZER ────────────────────────
-_SMALL_CAPS_MAP = str.maketrans(
-    "ᴀʙᴄᴅᴇꜰɢʜɪᴊᴋʟᴍɴᴏᴘǫʀsꜱᴛᴜᴠᴡxʏᴢ",
-    "abcdefghijklmnopqrstuvwxyz"
-)
+_SMALL_CAPS_MAP = str.maketrans({
+    "ᴀ": "a", "ʙ": "b", "ᴄ": "c", "ᴅ": "d", "ᴇ": "e", "ꜰ": "f", "ғ": "f",
+    "ɢ": "g", "ʜ": "h", "ɪ": "i", "ᴊ": "j", "ᴋ": "k", "ʟ": "l", "ᴍ": "m",
+    "ɴ": "n", "ᴏ": "o", "ᴘ": "p", "ǫ": "q", "ꞯ": "q", "ʀ": "r", "s": "s",
+    "ꜱ": "s", "ᴛ": "t", "ᴜ": "u", "ᴠ": "v", "ᴡ": "w", "x": "x", "ʏ": "y", "ᴢ": "z"
+})
 
 def normalize_text(text: str) -> str:
     if not text:
