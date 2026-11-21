@@ -22,11 +22,11 @@ IMAGES = [
     "https://ibb.co/q36gxXTP",
     "https://ibb.co/MkXjSwkm",
     "https://ibb.co/CS5zPq2",
-    "https://graph.org/file/fdb6274d6fcf654b95863-90c4e60858529ba752.jpg",
-    "https://graph.org/file/b9b92be3fc206c88b780b-d80a12ea996e96de20.jpg",
-    "https://graph.org/file/2eba72bc5cc4470c99b9d-c9e9ceb117d1a498e0.jpg",
-    "https://graph.org/file/075e8d47f63f9f45dfb54-1121766c13625f4bc4.jpg",
-    "https://graph.org/file/e4d9bee7a78e3f248f3bd-5249020a8b06628278.jpg"
+    "https://ibb.co/VcZXGqR4",
+    "https://ibb.co/XfV62z1C",
+    "https://ibb.co/tThBH5LV",
+    "https://ibb.co/Z1Vq3Vfk",
+    "https://ibb.co/pv82cmvH"
 ]
 
 _RESOLVED_IMGBB = {}
