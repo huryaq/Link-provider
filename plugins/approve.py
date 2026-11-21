@@ -1,14 +1,14 @@
 import asyncio
+import html
 from pyrogram import Client, filters
-from pyrogram.enums import ChatMemberStatus, ParseMode
+from pyrogram.enums import ChatMemberStatus
 from pyrogram.types import Message, ChatJoinRequest, InlineKeyboardMarkup
 from pyrogram.errors import UserNotParticipant
 from config import CHAT_ID, APPROVED
 from database.database import set_approval_off, is_approval_off, is_admin
-from plugins.helpers import get_preview, sbtn, reply_ui
+from plugins.helpers import sbtn, reply_ui, send_ui, safe_mention
 
-# Default settings
-APPROVAL_WAIT_TIME = 5  # seconds
+APPROVAL_WAIT_TIME = 5
 AUTO_APPROVE_ENABLED = True
 
 @Client.on_chat_join_request((filters.group | filters.channel) & filters.chat(CHAT_ID) if CHAT_ID else (filters.group | filters.channel))
@@ -46,48 +46,42 @@ async def autoapprove(client: Client, message: ChatJoinRequest):
             buttons = [
                 [sbtn(f"• ᴏᴘᴇɴ {chat.title} •", url=invite_link, style="success")],
                 [
-                    sbtn("◈ ᴍᴀɪɴᴛᴀɪɴᴇᴅ ʙʏ ᴋᴀʀᴀsᴜ", url="https://t.me/Karasu_07", style="primary"),
+                    sbtn("◈ ᴍᴀɪɴᴛᴀɪɴᴇᴅ ʙʏ 𝗚ᴏᴊᴏ", url="https://t.me/urr_sanjiii", style="primary"),
                     sbtn("✖ ᴄʟᴏsᴇ", callback_data="close", style="danger")
                 ]
             ]
             text = (
-                f"{get_preview()}"
-                f"<blockquote><b>➲ 𝗥𝗘𝗤𝗨𝗘𝗦𝗧 𝗔𝗣𝗣𝗥𝗢𝗩𝗘𝗗 ⚡</b></blockquote>\n"
-                f"<blockquote>◍ ʜᴇʏ {user.mention}!\n"
-                f"◍ ʏᴏᴜʀ ʀᴇǫᴜᴇsᴛ ᴛᴏ ᴊᴏɪɴ <b>{chat.title}</b> ʜᴀs ʙᴇᴇɴ ᴀᴘᴘʀᴏᴠᴇᴅ ɪɴsᴛᴀɴᴛʟʏ!</blockquote>"
+                f"<blockquote><b>「 ➲ 𝗥𝗘𝗤𝗨𝗘𝗦𝗧 𝗔𝗣𝗣𝗥𝗢𝗩𝗘𝗗 ⚡ 」</b></blockquote>\n"
+                f"<blockquote><b>◍ ʜᴇʏ {safe_mention(user)}!\n"
+                f"◍ ʏᴏᴜʀ ʀᴇǫᴜᴇsᴛ ᴛᴏ ᴊᴏɪɴ {html.escape(chat.title)} ʜᴀs ʙᴇᴇɴ ᴀᴘᴘʀᴏᴠᴇᴅ ɪɴsᴛᴀɴᴛʟʏ!</b></blockquote>"
             )
-            await client.send_message(
+            await send_ui(
                 chat_id=user.id,
                 text=text,
                 reply_markup=InlineKeyboardMarkup(buttons),
-                parse_mode=ParseMode.HTML
+                auto_delete_sec=300
             )
         except Exception as e:
             print(f"Could not send approval DM to {user.id}: {e}")
 
-# ─── AUTO-APPROVE ADMIN COMMANDS ───────────────────────────────────────
 @Client.on_message(filters.command("reqtime") & filters.private)
 async def set_reqtime(client: Client, message: Message):
     if not await is_admin(message.from_user.id):
         return
     global APPROVAL_WAIT_TIME
     close_btn = InlineKeyboardMarkup([[sbtn("✖ ᴄʟᴏsᴇ", callback_data="close", style="danger")]])
-
     if len(message.command) != 2 or not message.command[1].isdigit():
         return await reply_ui(
             message,
-            f"{get_preview()}"
-            f"<blockquote><b>➲ 𝗥𝗘𝗤𝗨𝗘𝗦𝗧 𝗧𝗜𝗠𝗘𝗥</b></blockquote>\n"
-            f"<blockquote>◍ ᴜsᴀɢᴇ: <code>/reqtime &lt;sᴇᴄᴏɴᴅs&gt;</code></blockquote>",
+            "<blockquote><b>「 ➲ 𝗥𝗘𝗤𝗨𝗘𝗦𝗧 𝗧𝗜𝗠𝗘𝗥 」</b></blockquote>\n"
+            "<blockquote><b>◍ ᴜsᴀɢᴇ:</b> <code>/reqtime &lt;sᴇᴄᴏɴᴅs&gt;</code></blockquote>",
             reply_markup=close_btn
         )
-
     APPROVAL_WAIT_TIME = int(message.command[1])
     await reply_ui(
         message,
-        f"{get_preview()}"
-        f"<blockquote><b>➲ 𝗧𝗜𝗠𝗘𝗥 𝗨𝗣𝗗𝗔𝗧𝗘𝗗 ⚡</b></blockquote>\n"
-        f"<blockquote>◍ ᴀᴘᴘʀᴏᴠᴀʟ ᴅᴇʟᴀʏ: <code>{APPROVAL_WAIT_TIME} sᴇᴄᴏɴᴅs</code></blockquote>",
+        f"<blockquote><b>「 ➲ 𝗧𝗜𝗠𝗘𝗥 𝗨𝗣𝗗𝗔𝗧𝗘𝗗 ⚡ 」</b></blockquote>\n"
+        f"<blockquote><b>◍ ᴀᴘᴘʀᴏᴠᴀʟ ᴅᴇʟᴀʏ:</b> <code>{APPROVAL_WAIT_TIME} sᴇᴄᴏɴᴅs</code></blockquote>",
         reply_markup=close_btn
     )
 
@@ -97,24 +91,20 @@ async def toggle_reqmode(client: Client, message: Message):
         return
     global AUTO_APPROVE_ENABLED
     close_btn = InlineKeyboardMarkup([[sbtn("✖ ᴄʟᴏsᴇ", callback_data="close", style="danger")]])
-
     if len(message.command) != 2 or message.command[1].lower() not in ["on", "off"]:
         return await reply_ui(
             message,
-            f"{get_preview()}"
-            f"<blockquote><b>➲ 𝗔𝗨𝗧𝗢-𝗔𝗣𝗣𝗥𝗢𝗩𝗘 𝗠𝗢𝗗𝗘</b></blockquote>\n"
-            f"<blockquote>◍ ᴜsᴀɢᴇ: <code>/reqmode on</code> ᴏʀ <code>/reqmode off</code></blockquote>",
+            "<blockquote><b>「 ➲ 𝗔𝗨𝗧𝗢-𝗔𝗣𝗣𝗥𝗢𝗩𝗘 𝗠𝗢𝗗𝗘 」</b></blockquote>\n"
+            "<blockquote><b>◍ ᴜsᴀɢᴇ:</b> <code>/reqmode on</code> ᴏʀ <code>/reqmode off</code></blockquote>",
             reply_markup=close_btn
         )
-
     mode = message.command[1].lower()
     AUTO_APPROVE_ENABLED = (mode == "on")
     status_str = "𝗘𝗡𝗔𝗕𝗟𝗘𝗗 ✅" if AUTO_APPROVE_ENABLED else "𝗗𝗜𝗦𝗔𝗕𝗟𝗘𝗗 ❌"
     await reply_ui(
         message,
-        f"{get_preview()}"
-        f"<blockquote><b>➲ 𝗔𝗨𝗧𝗢-𝗔𝗣𝗣𝗥𝗢𝗩𝗘 {status_str}</b></blockquote>\n"
-        f"<blockquote>◍ sᴛᴀᴛᴜs: <code>{mode.upper()}</code></blockquote>",
+        f"<blockquote><b>「 ➲ 𝗔𝗨𝗧𝗢-𝗔𝗣𝗣𝗥𝗢𝗩𝗘 {status_str} 」</b></blockquote>\n"
+        f"<blockquote><b>◍ sᴛᴀᴛᴜs:</b> <code>{mode.upper()}</code></blockquote>",
         reply_markup=close_btn
     )
 
@@ -123,23 +113,19 @@ async def approve_off_command(client: Client, message: Message):
     if not await is_admin(message.from_user.id):
         return
     close_btn = InlineKeyboardMarkup([[sbtn("✖ ᴄʟᴏsᴇ", callback_data="close", style="danger")]])
-
     if len(message.command) != 2 or not message.command[1].lstrip("-").isdigit():
         return await reply_ui(
             message,
-            f"{get_preview()}"
-            f"<blockquote><b>➲ 𝗔𝗣𝗣𝗥𝗢𝗩𝗘 𝗢𝗙𝗙</b></blockquote>\n"
-            f"<blockquote>◍ ᴜsᴀɢᴇ: <code>/approveoff -100xxxxxxxxxx</code></blockquote>",
+            "<blockquote><b>「 ➲ 𝗔𝗣𝗣𝗥𝗢𝗩𝗘 𝗢𝗙𝗙 」</b></blockquote>\n"
+            "<blockquote><b>◍ ᴜsᴀɢᴇ:</b> <code>/approveoff -100xxxxxxxxxx</code></blockquote>",
             reply_markup=close_btn
         )
-
     channel_id = int(message.command[1])
     await set_approval_off(channel_id, True)
     await reply_ui(
         message,
-        f"{get_preview()}"
-        f"<blockquote><b>➲ 𝗔𝗨𝗧𝗢-𝗔𝗣𝗣𝗥𝗢𝗩𝗘 𝗗𝗜𝗦𝗔𝗕𝗟𝗘𝗗 ❌</b></blockquote>\n"
-        f"<blockquote>◍ ɪᴅ: <code>{channel_id}</code></blockquote>",
+        f"<blockquote><b>「 ➲ 𝗔𝗨𝗧𝗢-𝗔𝗣𝗣𝗥𝗢𝗩𝗘 𝗗𝗜𝗦𝗔𝗕𝗟𝗘𝗗 ❌ 」</b></blockquote>\n"
+        f"<blockquote><b>◍ ɪᴅ:</b> <code>{channel_id}</code></blockquote>",
         reply_markup=close_btn
     )
 
@@ -148,22 +134,18 @@ async def approve_on_command(client: Client, message: Message):
     if not await is_admin(message.from_user.id):
         return
     close_btn = InlineKeyboardMarkup([[sbtn("✖ ᴄʟᴏsᴇ", callback_data="close", style="danger")]])
-
     if len(message.command) != 2 or not message.command[1].lstrip("-").isdigit():
         return await reply_ui(
             message,
-            f"{get_preview()}"
-            f"<blockquote><b>➲ 𝗔𝗣𝗣𝗥𝗢𝗩𝗘 𝗢𝗡</b></blockquote>\n"
-            f"<blockquote>◍ ᴜsᴀɢᴇ: <code>/approveon -100xxxxxxxxxx</code></blockquote>",
+            "<blockquote><b>「 ➲ 𝗔𝗣𝗣𝗥𝗢𝗩𝗘 𝗢𝗡 」</b></blockquote>\n"
+            "<blockquote><b>◍ ᴜsᴀɢᴇ:</b> <code>/approveon -100xxxxxxxxxx</code></blockquote>",
             reply_markup=close_btn
         )
-
     channel_id = int(message.command[1])
     await set_approval_off(channel_id, False)
     await reply_ui(
         message,
-        f"{get_preview()}"
-        f"<blockquote><b>➲ 𝗔𝗨𝗧𝗢-𝗔𝗣𝗣𝗥𝗢𝗩𝗘 𝗘𝗡𝗔𝗕𝗟𝗘𝗗 ⚡</b></blockquote>\n"
-        f"<blockquote>◍ ɪᴅ: <code>{channel_id}</code></blockquote>",
+        f"<blockquote><b>「 ➲ 𝗔𝗨𝗧𝗢-𝗔𝗣𝗣𝗥𝗢𝗩𝗘 𝗘𝗡𝗔𝗕𝗟𝗘𝗗 ⚡ 」</b></blockquote>\n"
+        f"<blockquote><b>◍ ɪᴅ:</b> <code>{channel_id}</code></blockquote>",
         reply_markup=close_btn
     )
