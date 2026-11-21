@@ -18,10 +18,10 @@ STICKERS = [
 # Aap yahan direct graph.org / i.ibb.co ya normal ibb.co links daal sakte hain;
 # bot ibb.co links ko automatically direct .jpg URL mein convert kar dega!
 IMAGES = [
-    "https://graph.org/file/d3c445d06682054410fee-35d35426f977f171ef.jpg",
-    "https://graph.org/file/b7bde228c107640ff11e3-a53a5c3d3f47763ea0.jpg",
-    "https://graph.org/file/e1ea638f7de70509c565b-3414778e2ef4685b4f.jpg",
-    "https://graph.org/file/59dc9808dc2d803d73d9f-ab72d2c527b8929986.jpg",
+    "https://ibb.co/gMn60D40",
+    "https://ibb.co/q36gxXTP",
+    "https://ibb.co/MkXjSwkm",
+    "https://ibb.co/CS5zPq2",
     "https://graph.org/file/fdb6274d6fcf654b95863-90c4e60858529ba752.jpg",
     "https://graph.org/file/b9b92be3fc206c88b780b-d80a12ea996e96de20.jpg",
     "https://graph.org/file/2eba72bc5cc4470c99b9d-c9e9ceb117d1a498e0.jpg",
