@@ -1,5 +1,7 @@
 import asyncio
+import html
 import random
+import re
 import time
 import unicodedata
 import aiohttp
@@ -13,17 +15,22 @@ STICKERS = [
     "CAACAgUAAxkBAAIm5Wp4nLY-xArcRez6HkUN0g80IAmIAAIeGgACx9AwVgmOMWuZKMGNPQQ"
 ]
 
+# Aap yahan direct graph.org / i.ibb.co ya normal ibb.co links daal sakte hain;
+# bot ibb.co links ko automatically direct .jpg URL mein convert kar dega!
 IMAGES = [
-    "https://ibb.co/gMn60D40",
-    "https://ibb.co/q36gxXTP",
-    "https://ibb.co/MkXjSwkm",
-    "https://ibb.co/CS5zPq2",
-    "https://ibb.co/VcZXGqR4",
-    "https://ibb.co/XfV62z1C",
-    "https://ibb.co/tThBH5LV",
-    "https://ibb.co/Z1Vq3Vfk",
-    "https://ibb.co/pv82cmvH"
+    "https://graph.org/file/d3c445d06682054410fee-35d35426f977f171ef.jpg",
+    "https://graph.org/file/b7bde228c107640ff11e3-a53a5c3d3f47763ea0.jpg",
+    "https://graph.org/file/e1ea638f7de70509c565b-3414778e2ef4685b4f.jpg",
+    "https://graph.org/file/59dc9808dc2d803d73d9f-ab72d2c527b8929986.jpg",
+    "https://graph.org/file/fdb6274d6fcf654b95863-90c4e60858529ba752.jpg",
+    "https://graph.org/file/b9b92be3fc206c88b780b-d80a12ea996e96de20.jpg",
+    "https://graph.org/file/2eba72bc5cc4470c99b9d-c9e9ceb117d1a498e0.jpg",
+    "https://graph.org/file/075e8d47f63f9f45dfb54-1121766c13625f4bc4.jpg",
+    "https://graph.org/file/e4d9bee7a78e3f248f3bd-5249020a8b06628278.jpg"
 ]
+
+_RESOLVED_IMGBB = {}
+_LAST_MSG_IMG = {}
 
 WELCOME_VIBES = [
     "ʜᴇʏ, ᴅᴏɴ'ᴛ ᴏᴠᴇʀᴛʜɪɴᴋ ɪᴛ! ɪ'ᴠᴇ ɢᴏᴛ ᴛʜᴇ ʟɪɴᴋs ᴄᴏᴠᴇʀᴇᴅ. ʏᴏᴜ ᴊᴜsᴛ ᴇɴᴊᴏʏ ʏᴏᴜʀ ᴅᴀʏ!",
@@ -35,6 +42,13 @@ WELCOME_VIBES = [
 def get_preview() -> str:
     return ""
 
+def safe_mention(user) -> str:
+    """Bulletproof HTML mention that never breaks Telegram entity parsing"""
+    if not user:
+        return "<b>ғʀɪᴇɴᴅ</b>"
+    name = html.escape(user.first_name or "ᴜsᴇʀ")
+    return f'<a href="tg://user?id={user.id}"><b>{name}</b></a>'
+
 def format_count(n: int) -> str:
     if not n:
         return "0"
@@ -43,6 +57,33 @@ def format_count(n: int) -> str:
     if n >= 1000:
         return f"{n/1000:.1f}K"
     return str(n)
+
+# ─── AUTO IMGBB DIRECT IMAGE RESOLVER (REMOVES 'hosted at ImgBB' TEXT) ─
+async def resolve_direct_image(url: str) -> str:
+    if "ibb.co/" not in url or "i.ibb.co/" in url:
+        return url
+    if url in _RESOLVED_IMGBB:
+        return _RESOLVED_IMGBB[url]
+    try:
+        session = await get_http_session()
+        async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+            page_html = await resp.text()
+            m = re.search(r'<meta\s+property=["\']og:image["\']\s+content=["\']([^"\']+)["\']', page_html)
+            if m:
+                direct = m.group(1)
+                _RESOLVED_IMGBB[url] = direct
+                return direct
+    except Exception:
+        pass
+    return url
+
+async def pick_clean_image(key=None) -> str:
+    prev = _LAST_MSG_IMG.get(key) if key else None
+    choices = [u for u in IMAGES if u != prev] or IMAGES
+    chosen = random.choice(choices)
+    if key:
+        _LAST_MSG_IMG[key] = chosen
+    return await resolve_direct_image(chosen)
 
 # ─── ULTRA-FAST UNICODE, SMALL-CAPS & FANCY FONT NORMALIZER ────────────
 _FANCY_FONT_MAP = str.maketrans({
@@ -119,6 +160,7 @@ async def api_delete_msg(chat_id: int, message_id: int):
 async def delete_bot_and_user_msg(chat_id: int, bot_msg_id: int, fallback_user_msg_id: int = None):
     key = (chat_id, bot_msg_id)
     _LAST_ACTIVE.pop(key, None)
+    _LAST_MSG_IMG.pop(key, None)
     user_msg_id = _LINKED_USER_MSG.pop(key, None) or fallback_user_msg_id
     await api_delete_msg(chat_id, bot_msg_id)
     if user_msg_id:
@@ -158,7 +200,7 @@ async def send_ui(
 ):
     session = await get_http_session()
     api_url = f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendMessage"
-    img_url = random.choice(IMAGES)
+    img_url = await pick_clean_image()
 
     payload = {
         "chat_id": chat_id,
@@ -186,11 +228,14 @@ async def send_ui(
                 bot_msg_id = data["result"]["message_id"]
                 key = (chat_id, bot_msg_id)
                 _LAST_ACTIVE[key] = time.monotonic()
+                _LAST_MSG_IMG[key] = img_url
                 if reply_to_message_id:
                     _LINKED_USER_MSG[key] = reply_to_message_id
                 if auto_delete_sec and auto_delete_sec > 0:
                     asyncio.create_task(_inactivity_watcher(chat_id, bot_msg_id, auto_delete_sec))
                 return BotApiMessage(chat_id, bot_msg_id, reply_to_message_id)
+            else:
+                print(f"BotAPI sendMessage error: {data}")
     except Exception as e:
         print(f"BotAPI sendMessage exception: {e}")
     return None
@@ -217,11 +262,11 @@ async def reply_ui(message, text: str, reply_markup: InlineKeyboardMarkup = None
 async def edit_ui(message, text: str, reply_markup: InlineKeyboardMarkup = None):
     session = await get_http_session()
     api_url = f"https://api.telegram.org/bot{TG_BOT_TOKEN}/editMessageText"
-    img_url = random.choice(IMAGES)
 
     chat_id = message.chat.id
     msg_id = message.id
     key = (chat_id, msg_id)
+    img_url = await pick_clean_image(key)
 
     if key in _LAST_ACTIVE:
         _LAST_ACTIVE[key] = time.monotonic()
@@ -251,61 +296,63 @@ async def edit_ui(message, text: str, reply_markup: InlineKeyboardMarkup = None)
             data = await resp.json()
             if data.get("ok"):
                 return BotApiMessage(chat_id, msg_id, _LINKED_USER_MSG.get(key))
+            else:
+                print(f"BotAPI editMessageText error: {data}")
     except Exception as e:
         print(f"BotAPI editMessageText exception: {e}")
     return None
 
-# ─── NEXT-LEVEL AESTHETIC UI TEMPLATES ─────────────────────────────────
+# ─── NEXT-LEVEL AESTHETIC UI TEMPLATES (BOLD SMALL CAPS + GOJO CREDIT) ─
 def get_start_text(user_mention: str = "") -> str:
     vibe = random.choice(WELCOME_VIBES)
-    greet = f"⟡ ᴡᴇʟᴄᴏᴍᴇ {user_mention} ~\n\n" if user_mention else ""
+    greet = f"<b>⟡ ᴡᴇʟᴄᴏᴍᴇ {user_mention} ~</b>\n\n" if user_mention else ""
     return (
         f"<blockquote><b>「 ➲ 𝗪𝗘𝗟𝗖𝗢𝗠𝗘 𝗧𝗢 𝗟𝗜𝗡𝗞𝗦𝗛𝗔𝗥𝗘 」</b></blockquote>\n"
         f"<blockquote>{greet}"
-        f"◍ {vibe}\n\n"
-        f"╰┈➤ <i>ᴜsᴇ ᴛʜᴇ ᴍᴇɴᴜ ʙᴇʟᴏᴡ ᴛᴏ ᴇxᴘʟᴏʀᴇ.</i></blockquote>"
+        f"<b>◍ {vibe}</b>\n\n"
+        f"<b>◈ ᴍᴀɪɴᴛᴀɪɴᴇᴅ ʙʏ <a href='https://t.me/urr_sanjiii'>𝗚ᴏᴊᴏ</a></b></blockquote>"
     )
 
 def get_about_text() -> str:
     return (
         f"<blockquote><b>「 ➲ 𝗔𝗕𝗢𝗨𝗧 𝗟𝗜𝗡𝗞𝗦𝗛𝗔𝗥𝗘 」</b></blockquote>\n"
-        f"<blockquote>◍ ʙʀᴏᴡsᴇ ᴀ ᴍᴀɴᴀɢᴇᴅ ᴄʜᴀɴɴᴇʟ ᴅɪʀᴇᴄᴛᴏʀʏ ᴀɴᴅ ʀᴇᴄᴇɪᴠᴇ ᴛᴇᴍᴘᴏʀᴀʀʏ ɪɴᴠɪᴛᴇ ʟɪɴᴋs. "
-        f"ʟɪɴᴋs ᴄᴀɴ ᴇxᴘɪʀᴇ ᴀᴜᴛᴏᴍᴀᴛɪᴄᴀʟʟʏ.\n\n"
-        f"⟡ <b>sᴛᴀᴛᴜs:</b> <code>ᴏɴʟɪɴᴇ ⚡</code>\n"
-        f"⟡ <b>ᴍᴀɪɴᴛᴀɪɴᴇᴅ ʙʏ:</b> <a href='https://t.me/Karasu_07'>ᴋᴀʀᴀsᴜ</a></blockquote>"
+        f"<blockquote><b>◍ ʙʀᴏᴡsᴇ ᴀ ᴍᴀɴᴀɢᴇᴅ ᴄʜᴀɴɴᴇʟ ᴅɪʀᴇᴄᴛᴏʀʏ ᴀɴᴅ ʀᴇᴄᴇɪᴠᴇ ᴛᴇᴍᴘᴏʀᴀʀʏ ɪɴᴠɪᴛᴇ ʟɪɴᴋs. "
+        f"ʟɪɴᴋs ᴄᴀɴ ᴇxᴘɪʀᴇ ᴀᴜᴛᴏᴍᴀᴛɪᴄᴀʟʟʏ.</b>\n\n"
+        f"<b>⟡ sᴛᴀᴛᴜs:</b> <code>ᴏɴʟɪɴᴇ ⚡</code>\n"
+        f"<b>◈ ᴍᴀɪɴᴛᴀɪɴᴇᴅ ʙʏ: <a href='https://t.me/urr_sanjiii'>𝗚ᴏᴊᴏ</a></b></blockquote>"
     )
 
 def get_help_text() -> str:
     return (
         f"<blockquote><b>「 ➲ 𝗟𝗜𝗡𝗞𝗦𝗛𝗔𝗥𝗘 𝗤𝗨𝗜𝗖𝗞 𝗚𝗨𝗜𝗗𝗘 」</b></blockquote>\n"
-        f"<blockquote>▸ <code>/start</code> — ᴏᴘᴇɴ ʟɪɴᴋsʜᴀʀᴇ\n"
+        f"<blockquote><b>▸ <code>/start</code> — ᴏᴘᴇɴ ʟɪɴᴋsʜᴀʀᴇ\n"
         f"▸ <code>/get &lt;ᴛɪᴛʟᴇ&gt;</code> — ғɪɴᴅ ᴀ ᴄʜᴀɴɴᴇʟ\n"
-        f"▸ ᴏᴘᴇɴ ᴀɴʏ sʜᴀʀᴇᴅ ʟɪɴᴋ ᴛᴏ ɢᴇᴛ ᴀ ᴛᴇᴍᴘᴏʀᴀʀʏ ɪɴᴠɪᴛᴇ.\n\n"
-        f"╰┈➤ <i>ᴀʟʟ ʟɪɴᴋs ᴀᴜᴛᴏ-ᴇxᴘɪʀᴇ ғᴏʀ sᴇᴄᴜʀɪᴛʏ.</i></blockquote>"
+        f"▸ ᴏᴘᴇɴ ᴀɴʏ sʜᴀʀᴇᴅ ʟɪɴᴋ ᴛᴏ ɢᴇᴛ ᴀ ᴛᴇᴍᴘᴏʀᴀʀʏ ɪɴᴠɪᴛᴇ.</b>\n\n"
+        f"<b>╰┈➤ <i>ᴀʟʟ ʟɪɴᴋs ᴀᴜᴛᴏ-ᴇxᴘɪʀᴇ ғᴏʀ sᴇᴄᴜʀɪᴛʏ.</i></b></blockquote>"
     )
 
 def get_directory_text() -> str:
     return (
         f"<blockquote><b>「 ➲ 𝗖𝗛𝗔𝗡𝗡𝗘𝗟 𝗗𝗜𝗥𝗘𝗖𝗧𝗢𝗥𝗬 🔎 」</b></blockquote>\n"
-        f"<blockquote>◍ ᴜsᴇ <code>/get &lt;ᴛɪᴛʟᴇ&gt;</code> ᴛᴏ ғɪɴᴅ ᴀɴʏ ᴄʜᴀɴɴᴇʟ ɪɴsᴛᴀɴᴛʟʏ.\n"
-        f"◍ ᴏʀ ᴛᴀᴘ <b>🔥 ᴛʀᴇɴᴅɪɴɢ</b> ʙᴇʟᴏᴡ ᴛᴏ sᴇᴇ ᴍᴏsᴛ ᴘᴏᴘᴜʟᴀʀ ᴄʜᴀɴɴᴇʟs!\n\n"
-        f"╰┈➤ <i>ᴇxᴀᴍᴘʟᴇ:</i> <code>/get naruto</code></blockquote>"
+        f"<blockquote><b>◍ ᴜsᴇ <code>/get &lt;ᴛɪᴛʟᴇ&gt;</code> ᴛᴏ ғɪɴᴅ ᴀɴʏ ᴄʜᴀɴɴᴇʟ ɪɴsᴛᴀɴᴛʟʏ.\n"
+        f"◍ ᴏʀ ᴛᴀᴘ 🔥 ᴛʀᴇɴᴅɪɴɢ ʙᴇʟᴏᴡ ᴛᴏ sᴇᴇ ғᴇᴀᴛᴜʀᴇᴅ ᴄʜᴀɴɴᴇʟs!</b>\n\n"
+        f"<b>╰┈➤ <i>ᴇxᴀᴍᴘʟᴇ:</i> <code>/get naruto</code></b></blockquote>"
     )
 
 def get_fsub_text() -> str:
     return (
         f"<blockquote><b>「 ➲ 𝗔𝗧𝗧𝗘𝗡𝗧𝗜𝗢𝗡 𝗥𝗘𝗤𝗨𝗜𝗥𝗘𝗗 🔒 」</b></blockquote>\n"
-        f"<blockquote>◍ ᴇʜ? ʏᴏᴜ ʜᴀᴠᴇɴ'ᴛ ᴊᴏɪɴᴇᴅ ᴏᴜʀ ᴄʜᴀɴɴᴇʟs ʏᴇᴛ! ᴊᴏɪɴ ᴛʜᴇᴍ ʙᴇʟᴏᴡ ᴛᴏ ᴜɴʟᴏᴄᴋ ʏᴏᴜʀ ғɪʟᴇs ɪɴsᴛᴀɴᴛʟʏ~\n\n"
+        f"<blockquote><b>◍ ᴇʜ? ʏᴏᴜ ʜᴀᴠᴇɴ'ᴛ ᴊᴏɪɴᴇᴅ ᴏᴜʀ ᴄʜᴀɴɴᴇʟs ʏᴇᴛ! ᴊᴏɪɴ ᴛʜᴇᴍ ʙᴇʟᴏᴡ ᴛᴏ ᴜɴʟᴏᴄᴋ ʏᴏᴜʀ ғɪʟᴇs ɪɴsᴛᴀɴᴛʟʏ~</b>\n\n"
         f"<b>≡ 𝗥𝗘𝗤𝗨𝗜𝗥𝗘𝗠𝗘𝗡𝗧𝗦 :</b>\n"
-        f"▸ ᴊᴏɪɴ ᴀʟʟ ʀᴇǫᴜɪʀᴇᴅ ᴄʜᴀɴɴᴇʟs\n"
-        f"▸ ᴄʟɪᴄᴋ <b>ᴛʀʏ ᴀɢᴀɪɴ ↻</b> ᴛᴏ ʀᴇᴄᴇɪᴠᴇ ʏᴏᴜʀ ғɪʟᴇs</blockquote>"
+        f"<b>▸ ᴊᴏɪɴ ᴀʟʟ ʀᴇǫᴜɪʀᴇᴅ ᴄʜᴀɴɴᴇʟs\n"
+        f"▸ ᴄʟɪᴄᴋ ᴛʀʏ ᴀɢᴀɪɴ ↻ ᴛᴏ ʀᴇᴄᴇɪᴠᴇ ʏᴏᴜʀ ғɪʟᴇs</b></blockquote>"
     )
 
 def get_leave_text(channel_title: str) -> str:
     return (
         f"<blockquote><b>「 ➲ 𝗖𝗛𝗔𝗡𝗡𝗘𝗟 𝗟𝗘𝗙𝗧 ⚠️ 」</b></blockquote>\n"
-        f"<blockquote>◍ ʏᴏᴜ ᴊᴜsᴛ ʟᴇғᴛ <b>{channel_title}</b>!\n"
-        f"◍ ᴘʟᴇᴀsᴇ ʀᴇᴊᴏɪɴ ᴛᴏ ᴋᴇᴇᴘ ʏᴏᴜʀ ᴀᴄᴄᴇss ᴛᴏ ᴏᴜʀ ʟɪɴᴋs ᴀɴᴅ ғɪʟᴇs ᴀᴄᴛɪᴠᴇ.</blockquote>"
+        f"<blockquote><b>◍ ʏᴏᴜ ᴊᴜsᴛ ʟᴇғᴛ {html.escape(channel_title)}!\n"
+        f"◍ ᴘʟᴇᴀsᴇ ʀᴇᴊᴏɪɴ ᴛᴏ ᴋᴇᴇᴘ ʏᴏᴜʀ ᴀᴄᴄᴇss ᴛᴏ ᴏᴜʀ ʟɪɴᴋs ᴀɴᴅ ғɪʟᴇs ᴀᴄᴛɪᴠᴇ.</b></blockquote>"
     )
 
 # ─── AUTO COMMANDS (SHORT SMALL CAPS & /get AT THE VERY BOTTOM) ────────
@@ -313,6 +360,9 @@ async def setup_bot_commands(client):
     commands = [
         BotCommand("start", "ᴏᴘᴇɴ ʟɪɴᴋsʜᴀʀᴇ"),
         BotCommand("panel", "ᴀᴅᴍɪɴ ᴄᴏɴᴛʀᴏʟ ᴘᴀɴᴇʟ"),
+        BotCommand("add_trend", "ᴀᴅᴅ ᴛᴏ ᴛʀᴇɴᴅɪɴɢ"),
+        BotCommand("del_trend", "ʀᴇᴍᴏᴠᴇ ғʀᴏᴍ ᴛʀᴇɴᴅɪɴɢ"),
+        BotCommand("list_trend", "ᴠɪᴇᴡ ᴛʀᴇɴᴅɪɴɢ ʟɪsᴛ"),
         BotCommand("add_fsub", "ᴀᴅᴅ ғsᴜʙ ᴄʜᴀɴɴᴇʟ"),
         BotCommand("del_fsub", "ʀᴇᴍᴏᴠᴇ ғsᴜʙ ᴄʜᴀɴɴᴇʟ"),
         BotCommand("fsub_chnl", "ᴠɪᴇᴡ ғsᴜʙ ʟɪsᴛ"),
