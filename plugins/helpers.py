@@ -15,8 +15,6 @@ STICKERS = [
     "CAACAgUAAxkBAAIm5Wp4nLY-xArcRez6HkUN0g80IAmIAAIeGgACx9AwVgmOMWuZKMGNPQQ"
 ]
 
-# Aap yahan direct graph.org / i.ibb.co ya normal ibb.co links daal sakte hain;
-# bot ibb.co links ko automatically direct .jpg URL mein convert kar dega!
 IMAGES = [
     "https://ibb.co/gMn60D40",
     "https://ibb.co/q36gxXTP",
@@ -39,11 +37,18 @@ WELCOME_VIBES = [
     "sᴇᴄᴜʀᴇ ᴛᴇᴍᴘᴏʀᴀʀʏ ɪɴᴠɪᴛᴇs, ɪɴsᴛᴀɴᴛ ᴀᴄᴄᴇss. ᴘɪᴄᴋ ᴀɴ ᴏᴘᴛɪᴏɴ ʙᴇʟᴏᴡ~"
 ]
 
+_TO_SC_MAP = str.maketrans(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz",
+    "ᴀʙᴄᴅᴇғɢʜɪᴊᴋʟᴍɴᴏᴘǫʀsᴛᴜᴠᴡxʏᴢᴀʙᴄᴅᴇғɢʜɪᴊᴋʟᴍɴᴏᴘǫʀsᴛᴜᴠᴡxʏᴢ"
+)
+
+def to_small_caps(text: str) -> str:
+    return text.translate(_TO_SC_MAP)
+
 def get_preview() -> str:
     return ""
 
 def safe_mention(user) -> str:
-    """Bulletproof HTML mention that never breaks Telegram entity parsing"""
     if not user:
         return "<b>ғʀɪᴇɴᴅ</b>"
     name = html.escape(user.first_name or "ᴜsᴇʀ")
@@ -66,16 +71,22 @@ async def resolve_direct_image(url: str) -> str:
         return _RESOLVED_IMGBB[url]
     try:
         session = await get_http_session()
-        async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+        headers = {"User-Agent": "Mozilla/5.0"}
+        async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=6)) as resp:
             page_html = await resp.text()
-            m = re.search(r'<meta\s+property=["\']og:image["\']\s+content=["\']([^"\']+)["\']', page_html)
+            m = re.search(r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\'](https://i\.ibb\.co/[^"\']+)["\']', page_html)
+            if not m:
+                m = re.search(r'https://i\.ibb\.co/[A-Za-z0-9]+/[^"\'\s<>]+', page_html)
             if m:
-                direct = m.group(1)
+                direct = m.group(1) if m.lastindex else m.group(0)
                 _RESOLVED_IMGBB[url] = direct
                 return direct
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"ImgBB resolve warning for {url}: {e}")
     return url
+
+async def preload_all_images():
+    await asyncio.gather(*[resolve_direct_image(u) for u in IMAGES], return_exceptions=True)
 
 async def pick_clean_image(key=None) -> str:
     prev = _LAST_MSG_IMG.get(key) if key else None
@@ -334,8 +345,8 @@ def get_help_text() -> str:
 def get_directory_text() -> str:
     return (
         f"<blockquote><b>「 ➲ 𝗖𝗛𝗔𝗡𝗡𝗘𝗟 𝗗𝗜𝗥𝗘𝗖𝗧𝗢𝗥𝗬 🔎 」</b></blockquote>\n"
-        f"<blockquote><b>◍ ᴜsᴇ <code>/get &lt;ᴛɪᴛʟᴇ&gt;</code> ᴛᴏ ғɪɴᴅ ᴀɴʏ ᴄʜᴀɴɴᴇʟ ɪɴsᴛᴀɴᴛʟʏ.\n"
-        f"◍ ᴏʀ ᴛᴀᴘ 🔥 ᴛʀᴇɴᴅɪɴɢ ʙᴇʟᴏᴡ ᴛᴏ sᴇᴇ ғᴇᴀᴛᴜʀᴇᴅ ᴄʜᴀɴɴᴇʟs!</b>\n\n"
+        f"<blockquote><b>◍ ʙʀᴏᴡsᴇ ᴀʟʟ ᴄʜᴀɴɴᴇʟs ɪɴ ᴀ-ᴢ ᴏʀᴅᴇʀ ᴜsɪɴɢ 📚 ɪɴᴅᴇx ʙᴇʟᴏᴡ.\n"
+        f"◍ ᴏʀ sᴇᴀʀᴄʜ ɪɴsᴛᴀɴᴛʟʏ ᴡɪᴛʜ <code>/get &lt;ᴛɪᴛʟᴇ&gt;</code>!</b>\n\n"
         f"<b>╰┈➤ <i>ᴇxᴀᴍᴘʟᴇ:</i> <code>/get naruto</code></b></blockquote>"
     )
 
@@ -357,6 +368,7 @@ def get_leave_text(channel_title: str) -> str:
 
 # ─── AUTO COMMANDS (SHORT SMALL CAPS & /get AT THE VERY BOTTOM) ────────
 async def setup_bot_commands(client):
+    asyncio.create_task(preload_all_images())
     commands = [
         BotCommand("start", "ᴏᴘᴇɴ ʟɪɴᴋsʜᴀʀᴇ"),
         BotCommand("panel", "ᴀᴅᴍɪɴ ᴄᴏɴᴛʀᴏʟ ᴘᴀɴᴇʟ"),
