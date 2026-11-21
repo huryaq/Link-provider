@@ -90,7 +90,7 @@ def get_panel_keyboard(mode: str) -> InlineKeyboardMarkup:
         ]
     ])
 
-# ─── PUBLIC A-Z INDEX HELPER (PURE RAM, EXCLUDES HIDDEN CHANNELS) ──────
+# ─── PUBLIC A-Z INDEX HELPER (PURE RAM, CLEAN SMALL-CAPS A B C BUTTONS) ─
 def get_public_az_items():
     items = []
     for ch_id, info in list(_CHANNEL_INDEX.items()):
@@ -119,27 +119,23 @@ async def render_public_az_menu(message):
             reply_markup=markup
         )
 
-    counts = {}
-    for it in items:
-        counts[it["letter"]] = counts.get(it["letter"], 0) + 1
-
-    sorted_ltrs = sorted([k for k in counts.keys() if k != "#"])
-    if "#" in counts:
+    present_letters = {it["letter"] for it in items}
+    sorted_ltrs = sorted([k for k in present_letters if k != "#"])
+    if "#" in present_letters:
         sorted_ltrs.append("#")
 
     buttons = []
     row = []
     for ltr in sorted_ltrs:
-        sc_ltr = to_small_caps(ltr)
-        row.append(sbtn(f"{sc_ltr} ({counts[ltr]})", callback_data=f"pubaz_{ltr}_0", style="primary"))
-        if len(row) == 4:
+        row.append(sbtn(f"{to_small_caps(ltr)}", callback_data=f"pubaz_{ltr}_0", style="primary"))
+        if len(row) == 6:
             buttons.append(row)
             row = []
     if row:
         buttons.append(row)
 
     buttons.append([
-        sbtn(f"◈ ᴀʟʟ ({len(items)})", callback_data="pubaz_ALL_0", style="primary"),
+        sbtn("◈ ᴀʟʟ", callback_data="pubaz_ALL_0", style="primary"),
         sbtn("🎲 ʀᴀɴᴅᴏᴍ", callback_data="pub_random", style="primary")
     ])
     buttons.append([
@@ -149,9 +145,9 @@ async def render_public_az_menu(message):
 
     await edit_ui(
         message,
-        f"<blockquote><b>「 📚 𝗔-𝗭 𝗖𝗛𝗔𝗡𝗡𝗘𝗟 𝗜𝗡𝗗𝗘𝗫 ({len(items)}) 」</b></blockquote>\n"
-        f"<blockquote><b>◍ sᴇʟᴇᴄᴛ ᴀ ʟᴇᴛᴛᴇʀ ʙᴇʟᴏᴡ ᴛᴏ ʙʀᴏᴡsᴇ ᴄʜᴀɴɴᴇʟs ɪɴ ᴀ-ᴢ ᴏʀᴅᴇʀ.\n"
-        f"╰┈➤ <i>ᴛᴀᴘ ᴀɴʏ ᴄʜᴀɴɴᴇʟ ᴛᴏ ɢᴇᴛ ᴀ ᴛᴇᴍᴘᴏʀᴀʀʏ ɪɴᴠɪᴛᴇ ʟɪɴᴋ!</i></b></blockquote>",
+        "<blockquote><b>「 📚 𝗔-𝗭 𝗖𝗛𝗔𝗡𝗡𝗘𝗟 𝗜𝗡𝗗𝗘𝗫 」</b></blockquote>\n"
+        "<blockquote><b>◍ sᴇʟᴇᴄᴛ ᴀ ʟᴇᴛᴛᴇʀ ʙᴇʟᴏᴡ ᴛᴏ ʙʀᴏᴡsᴇ ᴄʜᴀɴɴᴇʟs ɪɴ ᴀ-ᴢ ᴏʀᴅᴇʀ.\n"
+        "╰┈➤ <i>ᴛᴀᴘ ᴀɴʏ ᴄʜᴀɴɴᴇʟ ᴛᴏ ɢᴇᴛ ᴀ ᴛᴇᴍᴘᴏʀᴀʀʏ ɪɴᴠɪᴛᴇ ʟɪɴᴋ!</i></b></blockquote>",
         reply_markup=InlineKeyboardMarkup(buttons)
     )
 
@@ -188,7 +184,7 @@ async def render_public_az_page(message, key: str, page: int):
     label = "ᴀʟʟ" if key == "ALL" else to_small_caps(key)
     await edit_ui(
         message,
-        f"<blockquote><b>「 📚 𝗜𝗡𝗗𝗘𝗫 • {label} ({len(items)}) 」</b></blockquote>\n"
+        f"<blockquote><b>「 📚 𝗜𝗡𝗗𝗘𝗫 • {label} 」</b></blockquote>\n"
         f"<blockquote><b>◍ ᴘᴀɢᴇ: <code>{page + 1}/{total_pages}</code>\n"
         f"╰┈➤ <i>ᴛᴀᴘ ᴀɴʏ ᴄʜᴀɴɴᴇʟ ʙᴇʟᴏᴡ ᴛᴏ ɢᴇᴛ ɪᴛs ɪɴᴠɪᴛᴇ ʟɪɴᴋ:</i></b></blockquote>",
         reply_markup=InlineKeyboardMarkup(buttons)
@@ -458,7 +454,7 @@ async def fsub_leave_alert(client: Bot, update: ChatMemberUpdated):
             except Exception:
                 pass
 
-# ─── CUSTOM TRENDING COMMANDS (/add_trend, /del_trend, /list_trend) ────
+# ─── CUSTOM TRENDING COMMANDS ──────────────────────────────────────────
 @Bot.on_message(filters.command("add_trend") & filters.private)
 async def add_trend_cmd(client: Bot, message: Message):
     if not await is_admin(message.from_user.id):
