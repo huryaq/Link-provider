@@ -25,24 +25,47 @@ IMAGES = [
     "https://graph.org/file/e4d9bee7a78e3f248f3bd-5249020a8b06628278.jpg"
 ]
 
+WELCOME_VIBES = [
+    "ʜᴇʏ, ᴅᴏɴ'ᴛ ᴏᴠᴇʀᴛʜɪɴᴋ ɪᴛ! ɪ'ᴠᴇ ɢᴏᴛ ᴛʜᴇ ʟɪɴᴋs ᴄᴏᴠᴇʀᴇᴅ. ʏᴏᴜ ᴊᴜsᴛ ᴇɴᴊᴏʏ ʏᴏᴜʀ ᴅᴀʏ!",
+    "ᴄᴏᴍᴇ ᴏɴ! ʟᴇᴛ's ᴋᴇᴇᴘ ᴛʜɪɴɢs sɪᴍᴘʟᴇ. ᴏɴᴇ ʟɪɴᴋ, ᴏɴᴇ sᴛᴇᴘ ᴀᴛ ᴀ ᴛɪᴍᴇ~",
+    "ʏᴏᴜʀ ʟɪɴᴋ sʜᴀʀᴇ ᴀssɪsᴛᴀɴᴛ ɪs ᴏɴʟɪɴᴇ. ғᴀsᴛ, sᴀғᴇ, ᴀɴᴅ ᴀʟᴡᴀʏs ʀᴇᴀᴅʏ!",
+    "sᴇᴄᴜʀᴇ ᴛᴇᴍᴘᴏʀᴀʀʏ ɪɴᴠɪᴛᴇs, ɪɴsᴛᴀɴᴛ ᴀᴄᴄᴇss. ᴘɪᴄᴋ ᴀɴ ᴏᴘᴛɪᴏɴ ʙᴇʟᴏᴡ~"
+]
+
 def get_preview() -> str:
     return ""
 
-# ─── ULTRA-FAST UNICODE & SMALL-CAPS NORMALIZER ────────────────────────
-_SMALL_CAPS_MAP = str.maketrans({
+def format_count(n: int) -> str:
+    if not n:
+        return "0"
+    if n >= 1000000:
+        return f"{n/1000000:.1f}M"
+    if n >= 1000:
+        return f"{n/1000:.1f}K"
+    return str(n)
+
+# ─── ULTRA-FAST UNICODE, SMALL-CAPS & FANCY FONT NORMALIZER ────────────
+_FANCY_FONT_MAP = str.maketrans({
     "ᴀ": "a", "ʙ": "b", "ᴄ": "c", "ᴅ": "d", "ᴇ": "e", "ꜰ": "f", "ғ": "f",
     "ɢ": "g", "ʜ": "h", "ɪ": "i", "ᴊ": "j", "ᴋ": "k", "ʟ": "l", "ᴍ": "m",
     "ɴ": "n", "ᴏ": "o", "ᴘ": "p", "ǫ": "q", "ꞯ": "q", "ʀ": "r", "s": "s",
-    "ꜱ": "s", "ᴛ": "t", "ᴜ": "u", "ᴠ": "v", "ᴡ": "w", "x": "x", "ʏ": "y", "ᴢ": "z"
+    "ꜱ": "s", "ᴛ": "t", "ᴜ": "u", "ᴠ": "v", "ᴡ": "w", "x": "x", "ʏ": "y", "ᴢ": "z",
+    "Ꭺ": "a", "Ᏼ": "b", "Ꮯ": "c", "Ꭰ": "d", "Ꭼ": "e", "Ꮐ": "g", "Ꮋ": "h",
+    "Ꮖ": "i", "Ꮰ": "j", "Ꮶ": "k", "Ꮮ": "l", "Ꮇ": "m", "Ν": "n", "Ꭴ": "o",
+    "Ꮲ": "p", "ℚ": "q", "Ꮢ": "r", "Ꮪ": "s", "Ꭲ": "t", "Ꮜ": "u", "Ꮩ": "v",
+    "Ꮃ": "w", "Χ": "x", "Ꭹ": "y", "Ꮓ": "z", "α": "a", "в": "b", "є": "e",
+    "ι": "i", "к": "k", "м": "m", "η": "n", "σ": "o", "ρ": "p", "т": "t",
+    "υ": "u", "ω": "w", "у": "y", "а": "a", "е": "e", "о": "o", "р": "p",
+    "с": "c", "х": "x"
 })
 
 def normalize_text(text: str) -> str:
     if not text:
         return ""
-    text = text.translate(_SMALL_CAPS_MAP)
+    text = text.translate(_FANCY_FONT_MAP)
     text = unicodedata.normalize("NFKD", text)
-    clean = "".join(ch.lower() for ch in text if ch.isalnum() or ch.isspace())
-    return " ".join(clean.split())
+    chars = [ch.lower() if ch.isalnum() else " " for ch in text]
+    return " ".join("".join(chars).split())
 
 # ─── COLORED BUTTON BUILDER (PRIMARY / DANGER / SUCCESS) ───────────────
 def sbtn(text: str, callback_data: str = None, url: str = None, style: str = None) -> InlineKeyboardButton:
@@ -71,8 +94,8 @@ def serialize_markup(markup: InlineKeyboardMarkup) -> dict:
 
 # ─── HIGH-CONCURRENCY HTTP POOL & INACTIVITY AUTO-DELETE TRACKER ───────
 _http_session = None
-_LAST_ACTIVE = {}       # (chat_id, bot_msg_id) -> monotonic timestamp
-_LINKED_USER_MSG = {}   # (chat_id, bot_msg_id) -> user_cmd_msg_id
+_LAST_ACTIVE = {}
+_LINKED_USER_MSG = {}
 
 async def get_http_session() -> aiohttp.ClientSession:
     global _http_session
@@ -131,7 +154,7 @@ async def send_ui(
     text: str,
     reply_markup: InlineKeyboardMarkup = None,
     reply_to_message_id: int = None,
-    auto_delete_sec: int = 180
+    auto_delete_sec: int = 120
 ):
     session = await get_http_session()
     api_url = f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendMessage"
@@ -172,7 +195,7 @@ async def send_ui(
         print(f"BotAPI sendMessage exception: {e}")
     return None
 
-async def reply_ui(message, text: str, reply_markup: InlineKeyboardMarkup = None, auto_delete_sec: int = 180):
+async def reply_ui(message, text: str, reply_markup: InlineKeyboardMarkup = None, auto_delete_sec: int = 120):
     chat_id = message.chat.id
     reply_id = None
     if getattr(message, "from_user", None) and not getattr(message.from_user, "is_self", False):
@@ -200,14 +223,13 @@ async def edit_ui(message, text: str, reply_markup: InlineKeyboardMarkup = None)
     msg_id = message.id
     key = (chat_id, msg_id)
 
-    # Refresh inactivity timer on button click!
     if key in _LAST_ACTIVE:
         _LAST_ACTIVE[key] = time.monotonic()
     else:
         _LAST_ACTIVE[key] = time.monotonic()
         if getattr(message, "reply_to_message", None):
             _LINKED_USER_MSG[key] = message.reply_to_message.id
-        asyncio.create_task(_inactivity_watcher(chat_id, msg_id, 180))
+        asyncio.create_task(_inactivity_watcher(chat_id, msg_id, 120))
 
     payload = {
         "chat_id": chat_id,
@@ -233,62 +255,73 @@ async def edit_ui(message, text: str, reply_markup: InlineKeyboardMarkup = None)
         print(f"BotAPI editMessageText exception: {e}")
     return None
 
-# ─── UI MESSAGE TEMPLATES ──────────────────────────────────────────────
-def get_start_text() -> str:
+# ─── NEXT-LEVEL AESTHETIC UI TEMPLATES ─────────────────────────────────
+def get_start_text(user_mention: str = "") -> str:
+    vibe = random.choice(WELCOME_VIBES)
+    greet = f"⟡ ᴡᴇʟᴄᴏᴍᴇ {user_mention} ~\n\n" if user_mention else ""
     return (
-        f"<blockquote><b>➲ 𝗪𝗘𝗟𝗖𝗢𝗠𝗘 𝗧𝗢 𝗟𝗜𝗡𝗞𝗦𝗛𝗔𝗥𝗘</b></blockquote>\n"
-        f"<blockquote>ʜᴇʏ, ᴅᴏɴ'ᴛ ᴏᴠᴇʀᴛʜɪɴᴋ ɪᴛ! ɪ'ᴠᴇ ɢᴏᴛ ᴛʜᴇ ʟɪɴᴋs ᴄᴏᴠᴇʀᴇᴅ. ʏᴏᴜ ᴊᴜsᴛ ᴇɴᴊᴏʏ ʏᴏᴜʀ ᴅᴀʏ!</blockquote>"
+        f"<blockquote><b>「 ➲ 𝗪𝗘𝗟𝗖𝗢𝗠𝗘 𝗧𝗢 𝗟𝗜𝗡𝗞𝗦𝗛𝗔𝗥𝗘 」</b></blockquote>\n"
+        f"<blockquote>{greet}"
+        f"◍ {vibe}\n\n"
+        f"╰┈➤ <i>ᴜsᴇ ᴛʜᴇ ᴍᴇɴᴜ ʙᴇʟᴏᴡ ᴛᴏ ᴇxᴘʟᴏʀᴇ.</i></blockquote>"
     )
 
 def get_about_text() -> str:
     return (
-        f"<blockquote><b>➲ 𝗔𝗕𝗢𝗨𝗧 𝗟𝗜𝗡𝗞𝗦𝗛𝗔𝗥𝗘</b></blockquote>\n"
+        f"<blockquote><b>「 ➲ 𝗔𝗕𝗢𝗨𝗧 𝗟𝗜𝗡𝗞𝗦𝗛𝗔𝗥𝗘 」</b></blockquote>\n"
         f"<blockquote>◍ ʙʀᴏᴡsᴇ ᴀ ᴍᴀɴᴀɢᴇᴅ ᴄʜᴀɴɴᴇʟ ᴅɪʀᴇᴄᴛᴏʀʏ ᴀɴᴅ ʀᴇᴄᴇɪᴠᴇ ᴛᴇᴍᴘᴏʀᴀʀʏ ɪɴᴠɪᴛᴇ ʟɪɴᴋs. "
         f"ʟɪɴᴋs ᴄᴀɴ ᴇxᴘɪʀᴇ ᴀᴜᴛᴏᴍᴀᴛɪᴄᴀʟʟʏ.\n\n"
-        f"ᴍᴀɪɴᴛᴀɪɴᴇᴅ ʙʏ <a href='https://t.me/Karasu_07'>ᴋᴀʀᴀsᴜ</a>.</blockquote>"
+        f"⟡ <b>sᴛᴀᴛᴜs:</b> <code>ᴏɴʟɪɴᴇ ⚡</code>\n"
+        f"⟡ <b>ᴍᴀɪɴᴛᴀɪɴᴇᴅ ʙʏ:</b> <a href='https://t.me/Karasu_07'>ᴋᴀʀᴀsᴜ</a></blockquote>"
     )
 
 def get_help_text() -> str:
     return (
-        f"<blockquote><b>➲ 𝗟𝗜𝗡𝗞𝗦𝗛𝗔𝗥𝗘 𝗤𝗨𝗜𝗖𝗞 𝗚𝗨𝗜𝗗𝗘</b></blockquote>\n"
-        f"<blockquote>◍ /start — ᴏᴘᴇɴ ʟɪɴᴋsʜᴀʀᴇ\n"
-        f"◍ /get &lt;ᴛɪᴛʟᴇ&gt; — ғɪɴᴅ ᴀ ᴄʜᴀɴɴᴇʟ\n"
-        f"◍ ᴏᴘᴇɴ ᴀ sʜᴀʀᴇᴅ ʟɪɴᴋ ᴛᴏ ʀᴇᴄᴇɪᴠᴇ ᴀ ᴛᴇᴍᴘᴏʀᴀʀʏ ɪɴᴠɪᴛᴇ.</blockquote>"
+        f"<blockquote><b>「 ➲ 𝗟𝗜𝗡𝗞𝗦𝗛𝗔𝗥𝗘 𝗤𝗨𝗜𝗖𝗞 𝗚𝗨𝗜𝗗𝗘 」</b></blockquote>\n"
+        f"<blockquote>▸ <code>/start</code> — ᴏᴘᴇɴ ʟɪɴᴋsʜᴀʀᴇ\n"
+        f"▸ <code>/get &lt;ᴛɪᴛʟᴇ&gt;</code> — ғɪɴᴅ ᴀ ᴄʜᴀɴɴᴇʟ\n"
+        f"▸ ᴏᴘᴇɴ ᴀɴʏ sʜᴀʀᴇᴅ ʟɪɴᴋ ᴛᴏ ɢᴇᴛ ᴀ ᴛᴇᴍᴘᴏʀᴀʀʏ ɪɴᴠɪᴛᴇ.\n\n"
+        f"╰┈➤ <i>ᴀʟʟ ʟɪɴᴋs ᴀᴜᴛᴏ-ᴇxᴘɪʀᴇ ғᴏʀ sᴇᴄᴜʀɪᴛʏ.</i></blockquote>"
     )
 
 def get_directory_text() -> str:
     return (
-        f"<blockquote><b>➲ 𝗖𝗛𝗔𝗡𝗡𝗘𝗟 𝗗𝗜𝗥𝗘𝗖𝗧𝗢𝗥𝗬 🔎</b></blockquote>\n"
-        f"<blockquote>◍ ᴜsᴇ <code>/get &lt;ᴛɪᴛʟᴇ&gt;</code> ᴛᴏ ғɪɴᴅ ᴀɴʏ ᴄʜᴀɴɴᴇʟ ʙʏ ɴᴀᴍᴇ.\n"
-        f"◍ ᴇxᴀᴍᴘʟᴇ: <code>/get naruto</code></blockquote>"
+        f"<blockquote><b>「 ➲ 𝗖𝗛𝗔𝗡𝗡𝗘𝗟 𝗗𝗜𝗥𝗘𝗖𝗧𝗢𝗥𝗬 🔎 」</b></blockquote>\n"
+        f"<blockquote>◍ ᴜsᴇ <code>/get &lt;ᴛɪᴛʟᴇ&gt;</code> ᴛᴏ ғɪɴᴅ ᴀɴʏ ᴄʜᴀɴɴᴇʟ ɪɴsᴛᴀɴᴛʟʏ.\n"
+        f"◍ ᴏʀ ᴛᴀᴘ <b>🔥 ᴛʀᴇɴᴅɪɴɢ</b> ʙᴇʟᴏᴡ ᴛᴏ sᴇᴇ ᴍᴏsᴛ ᴘᴏᴘᴜʟᴀʀ ᴄʜᴀɴɴᴇʟs!\n\n"
+        f"╰┈➤ <i>ᴇxᴀᴍᴘʟᴇ:</i> <code>/get naruto</code></blockquote>"
     )
 
 def get_fsub_text() -> str:
     return (
-        f"<blockquote><b>➲ 𝗔𝗧𝗧𝗘𝗡𝗧𝗜𝗢𝗡 𝗥𝗘𝗤𝗨𝗜𝗥𝗘𝗗 🔒</b></blockquote>\n"
+        f"<blockquote><b>「 ➲ 𝗔𝗧𝗧𝗘𝗡𝗧𝗜𝗢𝗡 𝗥𝗘𝗤𝗨𝗜𝗥𝗘𝗗 🔒 」</b></blockquote>\n"
         f"<blockquote>◍ ᴇʜ? ʏᴏᴜ ʜᴀᴠᴇɴ'ᴛ ᴊᴏɪɴᴇᴅ ᴏᴜʀ ᴄʜᴀɴɴᴇʟs ʏᴇᴛ! ᴊᴏɪɴ ᴛʜᴇᴍ ʙᴇʟᴏᴡ ᴛᴏ ᴜɴʟᴏᴄᴋ ʏᴏᴜʀ ғɪʟᴇs ɪɴsᴛᴀɴᴛʟʏ~\n\n"
         f"<b>≡ 𝗥𝗘𝗤𝗨𝗜𝗥𝗘𝗠𝗘𝗡𝗧𝗦 :</b>\n"
-        f"◍ ᴊᴏɪɴ ᴀʟʟ ʀᴇǫᴜɪʀᴇᴅ ᴄʜᴀɴɴᴇʟs\n"
-        f"◍ ᴄʟɪᴄᴋ <b>ᴛʀʏ ᴀɢᴀɪɴ ↻</b> ᴛᴏ ʀᴇᴄᴇɪᴠᴇ ʏᴏᴜʀ ғɪʟᴇs</blockquote>"
+        f"▸ ᴊᴏɪɴ ᴀʟʟ ʀᴇǫᴜɪʀᴇᴅ ᴄʜᴀɴɴᴇʟs\n"
+        f"▸ ᴄʟɪᴄᴋ <b>ᴛʀʏ ᴀɢᴀɪɴ ↻</b> ᴛᴏ ʀᴇᴄᴇɪᴠᴇ ʏᴏᴜʀ ғɪʟᴇs</blockquote>"
     )
 
 def get_leave_text(channel_title: str) -> str:
     return (
-        f"<blockquote><b>➲ 𝗖𝗛𝗔𝗡𝗡𝗘𝗟 𝗟𝗘𝗙𝗧 𝗪𝗔𝗥𝗡𝗜𝗡𝗚 ⚠️</b></blockquote>\n"
+        f"<blockquote><b>「 ➲ 𝗖𝗛𝗔𝗡𝗡𝗘𝗟 𝗟𝗘𝗙𝗧 ⚠️ 」</b></blockquote>\n"
         f"<blockquote>◍ ʏᴏᴜ ᴊᴜsᴛ ʟᴇғᴛ <b>{channel_title}</b>!\n"
         f"◍ ᴘʟᴇᴀsᴇ ʀᴇᴊᴏɪɴ ᴛᴏ ᴋᴇᴇᴘ ʏᴏᴜʀ ᴀᴄᴄᴇss ᴛᴏ ᴏᴜʀ ʟɪɴᴋs ᴀɴᴅ ғɪʟᴇs ᴀᴄᴛɪᴠᴇ.</blockquote>"
     )
 
-# ─── AUTO COMMANDS (SMALL CAPS & /get AT THE VERY BOTTOM) ──────────────
+# ─── AUTO COMMANDS (SHORT SMALL CAPS & /get AT THE VERY BOTTOM) ────────
 async def setup_bot_commands(client):
     commands = [
         BotCommand("start", "ᴏᴘᴇɴ ʟɪɴᴋsʜᴀʀᴇ"),
+        BotCommand("panel", "ᴀᴅᴍɪɴ ᴄᴏɴᴛʀᴏʟ ᴘᴀɴᴇʟ"),
         BotCommand("add_fsub", "ᴀᴅᴅ ғsᴜʙ ᴄʜᴀɴɴᴇʟ"),
         BotCommand("del_fsub", "ʀᴇᴍᴏᴠᴇ ғsᴜʙ ᴄʜᴀɴɴᴇʟ"),
         BotCommand("fsub_chnl", "ᴠɪᴇᴡ ғsᴜʙ ʟɪsᴛ"),
         BotCommand("req", "ᴛᴏɢɢʟᴇ ғsᴜʙ ᴍᴏᴅᴇ"),
         BotCommand("addch", "ᴀᴅᴅ ᴄʜᴀɴɴᴇʟ"),
         BotCommand("delch", "ʀᴇᴍᴏᴠᴇ ᴄʜᴀɴɴᴇʟ"),
+        BotCommand("hidech", "ʜɪᴅᴇ ғʀᴏᴍ /ɢᴇᴛ"),
+        BotCommand("unhidech", "sʜᴏᴡ ɪɴ /ɢᴇᴛ"),
+        BotCommand("hiddench", "ᴠɪᴇᴡ ʜɪᴅᴅᴇɴ ʟɪsᴛ"),
         BotCommand("links", "ᴀʟʟ ᴄʜᴀɴɴᴇʟ ʟɪɴᴋs"),
         BotCommand("genlink", "ᴘʀᴏᴛᴇᴄᴛ ᴀ ʟɪɴᴋ"),
         BotCommand("add_admin", "ᴀᴅᴅ ᴀᴅᴍɪɴ"),
