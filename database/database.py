@@ -1,6 +1,6 @@
 import motor.motor_asyncio
 import base64
-from config import DB_URI, DB_NAME, ADMINS
+from config import DB_URI, DB_NAME, ADMINS, OWNER_ID
 from datetime import datetime
 from typing import List, Optional, Union
 
@@ -12,6 +12,7 @@ user_data = database['users']
 channels_collection = database['channels']
 fsub_channels_collection = database['fsub_channels']
 admins_collection = database['admins']
+removed_admins_collection = database['removed_admins']
 settings_collection = database['settings']
 
 # --- MEMORY CACHE ---
@@ -71,38 +72,97 @@ async def del_user(user_id: int) -> bool:
     except Exception:
         return False
 
-# ─── ADMIN FUNCTIONS ────────────────────────────────────────────────────
+# ─── FIXED ADMIN MANAGEMENT (WORKS EVEN FOR CONFIG ADMINS) ─────────────
 async def is_admin(user_id: int) -> bool:
-    if user_id in ADMINS:
+    uid = int(user_id)
+    if uid == OWNER_ID:
         return True
     try:
-        return bool(await admins_collection.find_one({'_id': int(user_id)}))
+        if await removed_admins_collection.find_one({'_id': uid}):
+            return False
+        if uid in ADMINS:
+            return True
+        return bool(await admins_collection.find_one({'_id': uid}))
     except Exception:
-        return False
+        return uid in ADMINS
 
 async def add_admin(user_id: int) -> bool:
+    uid = int(user_id)
     try:
-        await admins_collection.update_one({'_id': int(user_id)}, {'$set': {'_id': int(user_id)}}, upsert=True)
+        await removed_admins_collection.delete_one({'_id': uid})
+        await admins_collection.update_one({'_id': uid}, {'$set': {'_id': uid}}, upsert=True)
+        if uid not in ADMINS:
+            ADMINS.append(uid)
         return True
     except Exception:
         return False
 
 async def remove_admin(user_id: int) -> bool:
+    uid = int(user_id)
+    if uid == OWNER_ID:
+        return False
     try:
-        result = await admins_collection.delete_one({'_id': int(user_id)})
-        return result.deleted_count > 0
+        res_del = await admins_collection.delete_one({'_id': uid})
+        was_in_config = uid in ADMINS
+        if was_in_config:
+            while uid in ADMINS:
+                ADMINS.remove(uid)
+        await removed_admins_collection.update_one({'_id': uid}, {'$set': {'_id': uid}}, upsert=True)
+        return (res_del.deleted_count > 0) or was_in_config
     except Exception:
         return False
 
 async def list_admins() -> list:
     try:
-        admins = await admins_collection.find().to_list(None)
-        db_admins = [admin['_id'] for admin in admins]
-        return list(set(ADMINS + db_admins))
+        db_admins = [doc['_id'] for doc in await admins_collection.find().to_list(None)]
+        removed = {doc['_id'] for doc in await removed_admins_collection.find().to_list(None)}
+        combined = set(ADMINS + db_admins) - removed
+        combined.add(OWNER_ID)
+        return sorted(list(combined))
     except Exception:
-        return ADMINS
+        return list(set(ADMINS + [OWNER_ID]))
 
-# ─── FSUB MODE SETTINGS ─────────────────────────────────────────────────
+# ─── HIDE / UNHIDE CHANNELS FROM /get + TRENDING CLICKS ────────────────
+async def set_channel_hidden(channel_id: int, hidden: bool = True) -> bool:
+    try:
+        await channels_collection.update_one(
+            {"channel_id": int(channel_id)},
+            {"$set": {"hidden_from_get": hidden}},
+            upsert=True
+        )
+        return True
+    except Exception:
+        return False
+
+async def get_hidden_channels() -> List[dict]:
+    try:
+        return await channels_collection.find({"hidden_from_get": True}).to_list(None)
+    except Exception:
+        return []
+
+async def increment_channel_clicks(channel_id: int):
+    try:
+        await channels_collection.update_one(
+            {"channel_id": int(channel_id)},
+            {"$inc": {"clicks": 1}},
+            upsert=False
+        )
+    except Exception:
+        pass
+
+async def get_top_channels(limit: int = 5) -> List[dict]:
+    try:
+        cursor = channels_collection.find({
+            "status": "active",
+            "hidden_from_get": {"$ne": True},
+            "original_link": {"$exists": False},
+            "title": {"$exists": True}
+        }).sort("clicks", -1).limit(limit)
+        return await cursor.to_list(length=limit)
+    except Exception:
+        return []
+
+# ─── FSUB MODE & CHANNELS ──────────────────────────────────────────────
 async def get_fsub_mode() -> str:
     try:
         data = await settings_collection.find_one({'_id': 'fsub_mode'})
@@ -112,16 +172,11 @@ async def get_fsub_mode() -> str:
 
 async def set_fsub_mode(mode: str) -> bool:
     try:
-        await settings_collection.update_one(
-            {'_id': 'fsub_mode'},
-            {'$set': {'mode': mode}},
-            upsert=True
-        )
+        await settings_collection.update_one({'_id': 'fsub_mode'}, {'$set': {'mode': mode}}, upsert=True)
         return True
     except Exception:
         return False
 
-# ─── FSUB CHANNELS ──────────────────────────────────────────────────────
 async def add_fsub_channel(channel_id: int) -> bool:
     try:
         await fsub_channels_collection.update_one(
