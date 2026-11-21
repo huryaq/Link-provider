@@ -27,11 +27,11 @@ from database.database import (
 from helper_func import get_readable_time
 from plugins.helpers import (
     STICKERS, sbtn, reply_ui, edit_ui, send_ui,
-    delete_bot_and_user_msg, format_count, safe_mention,
+    delete_bot_and_user_msg, format_count, safe_mention, to_small_caps,
     get_start_text, get_about_text, get_help_text,
     get_directory_text, get_fsub_text, get_leave_text
 )
-from plugins.newpost import _CHANNEL_INDEX
+from plugins.newpost import _CHANNEL_INDEX, warmup_channel_index
 
 cancel_lock = asyncio.Lock()
 is_canceled = False
@@ -75,7 +75,7 @@ def get_panel_keyboard(mode: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [
             sbtn("⚡ sʏsᴛᴇᴍ sᴛᴀᴛᴜs", callback_data="panel_status", style="primary"),
-            sbtn(f"↻ ᴍᴏᴅᴇ: {mode.upper()}", callback_data="panel_toggle_req", style="success")
+            sbtn(f"↻ ᴍᴏᴅᴇ: {to_small_caps(mode)}", callback_data="panel_toggle_req", style="success")
         ],
         [
             sbtn("🔒 ғsᴜʙ ʟɪsᴛ", callback_data="panel_fsub", style="primary"),
@@ -89,6 +89,110 @@ def get_panel_keyboard(mode: str) -> InlineKeyboardMarkup:
             sbtn("✖ ᴄʟᴏsᴇ", callback_data="close", style="danger")
         ]
     ])
+
+# ─── PUBLIC A-Z INDEX HELPER (PURE RAM, EXCLUDES HIDDEN CHANNELS) ──────
+def get_public_az_items():
+    items = []
+    for ch_id, info in list(_CHANNEL_INDEX.items()):
+        norm = info.get("norm", "")
+        ltr = norm[0].upper() if norm and norm[0].isalpha() else "#"
+        items.append({
+            "channel_id": ch_id,
+            "title": info["title"],
+            "norm": norm,
+            "letter": ltr
+        })
+    items.sort(key=lambda x: (x["letter"] == "#", x["norm"]))
+    return items
+
+async def render_public_az_menu(message):
+    items = get_public_az_items()
+    if not items:
+        markup = InlineKeyboardMarkup([[
+            sbtn("‹ ʙᴀᴄᴋ", callback_data="directory", style="primary"),
+            sbtn("✖ ᴄʟᴏsᴇ", callback_data="close", style="danger")
+        ]])
+        return await edit_ui(
+            message,
+            "<blockquote><b>「 📚 𝗔-𝗭 𝗜𝗡𝗗𝗘𝗫 」</b></blockquote>\n"
+            "<blockquote><b>◍ ᴄʜᴀɴɴᴇʟ ɪɴᴅᴇx ɪs ʟᴏᴀᴅɪɴɢ... ᴛʀʏ ᴀɢᴀɪɴ ɪɴ ᴀ ᴍᴏᴍᴇɴᴛ.</b></blockquote>",
+            reply_markup=markup
+        )
+
+    counts = {}
+    for it in items:
+        counts[it["letter"]] = counts.get(it["letter"], 0) + 1
+
+    sorted_ltrs = sorted([k for k in counts.keys() if k != "#"])
+    if "#" in counts:
+        sorted_ltrs.append("#")
+
+    buttons = []
+    row = []
+    for ltr in sorted_ltrs:
+        sc_ltr = to_small_caps(ltr)
+        row.append(sbtn(f"{sc_ltr} ({counts[ltr]})", callback_data=f"pubaz_{ltr}_0", style="primary"))
+        if len(row) == 4:
+            buttons.append(row)
+            row = []
+    if row:
+        buttons.append(row)
+
+    buttons.append([
+        sbtn(f"◈ ᴀʟʟ ({len(items)})", callback_data="pubaz_ALL_0", style="primary"),
+        sbtn("🎲 ʀᴀɴᴅᴏᴍ", callback_data="pub_random", style="primary")
+    ])
+    buttons.append([
+        sbtn("‹ ʙᴀᴄᴋ", callback_data="directory", style="primary"),
+        sbtn("✖ ᴄʟᴏsᴇ", callback_data="close", style="danger")
+    ])
+
+    await edit_ui(
+        message,
+        f"<blockquote><b>「 📚 𝗔-𝗭 𝗖𝗛𝗔𝗡𝗡𝗘𝗟 𝗜𝗡𝗗𝗘𝗫 ({len(items)}) 」</b></blockquote>\n"
+        f"<blockquote><b>◍ sᴇʟᴇᴄᴛ ᴀ ʟᴇᴛᴛᴇʀ ʙᴇʟᴏᴡ ᴛᴏ ʙʀᴏᴡsᴇ ᴄʜᴀɴɴᴇʟs ɪɴ ᴀ-ᴢ ᴏʀᴅᴇʀ.\n"
+        f"╰┈➤ <i>ᴛᴀᴘ ᴀɴʏ ᴄʜᴀɴɴᴇʟ ᴛᴏ ɢᴇᴛ ᴀ ᴛᴇᴍᴘᴏʀᴀʀʏ ɪɴᴠɪᴛᴇ ʟɪɴᴋ!</i></b></blockquote>",
+        reply_markup=InlineKeyboardMarkup(buttons)
+    )
+
+async def render_public_az_page(message, key: str, page: int):
+    items = get_public_az_items()
+    if key != "ALL":
+        items = [it for it in items if it["letter"] == key]
+
+    PER_PAGE = 8
+    total_pages = max(1, (len(items) + PER_PAGE - 1) // PER_PAGE)
+    page = max(0, min(page, total_pages - 1))
+    start_idx = page * PER_PAGE
+    end_idx = start_idx + PER_PAGE
+
+    buttons = []
+    row = []
+    for it in items[start_idx:end_idx]:
+        row.append(sbtn(f"▸ {it['title']}", callback_data=f"getch_{it['channel_id']}", style="primary"))
+        if len(row) == 2:
+            buttons.append(row)
+            row = []
+    if row:
+        buttons.append(row)
+
+    nav = []
+    if page > 0:
+        nav.append(sbtn("‹ ᴘʀᴇᴠ", callback_data=f"pubaz_{key}_{page-1}", style="primary"))
+    nav.append(sbtn("📚 ᴀ-ᴢ ɪɴᴅᴇx", callback_data="pubaz_MENU", style="primary"))
+    if page < total_pages - 1:
+        nav.append(sbtn("ɴᴇxᴛ ›", callback_data=f"pubaz_{key}_{page+1}", style="primary"))
+    buttons.append(nav)
+    buttons.append([sbtn("✖ ᴄʟᴏsᴇ", callback_data="close", style="danger")])
+
+    label = "ᴀʟʟ" if key == "ALL" else to_small_caps(key)
+    await edit_ui(
+        message,
+        f"<blockquote><b>「 📚 𝗜𝗡𝗗𝗘𝗫 • {label} ({len(items)}) 」</b></blockquote>\n"
+        f"<blockquote><b>◍ ᴘᴀɢᴇ: <code>{page + 1}/{total_pages}</code>\n"
+        f"╰┈➤ <i>ᴛᴀᴘ ᴀɴʏ ᴄʜᴀɴɴᴇʟ ʙᴇʟᴏᴡ ᴛᴏ ɢᴇᴛ ɪᴛs ɪɴᴠɪᴛᴇ ʟɪɴᴋ:</i></b></blockquote>",
+        reply_markup=InlineKeyboardMarkup(buttons)
+    )
 
 async def _check_single_channel(client: Bot, ch_id: int, user_id: int):
     try:
@@ -372,7 +476,6 @@ async def add_trend_cmd(client: Bot, message: Message):
             "<b>◍ ᴍᴀᴋᴇ sᴜʀᴇ ᴛʜᴇ ʙᴏᴛ ɪs ᴀᴅᴍɪɴ ɪɴ ᴛʜᴀᴛ ᴄʜᴀɴɴᴇʟ.</b></blockquote>",
             reply_markup=close_btn
         )
-
     await add_trending_channel(ch_id, title)
     await reply_ui(
         message,
@@ -396,7 +499,6 @@ async def del_trend_cmd(client: Bot, message: Message):
             "<blockquote><b>◍ ᴜsᴀɢᴇ:</b> <code>/del_trend -100xxxxxxxxxx</code></blockquote>",
             reply_markup=close_btn
         )
-
     removed = await remove_trending_channel(ch_id)
     if not removed:
         return await reply_ui(
@@ -737,7 +839,7 @@ async def broadcast_handler(client: Bot, message: Message):
         reply_markup=close_btn
     )
 
-# ─── ALL INTERACTIVE UI & PANEL CALLBACKS ──────────────────────────────
+# ─── ALL INTERACTIVE UI & DIRECTORY A-Z INDEX CALLBACKS ────────────────
 @Bot.on_callback_query()
 async def cb_handler(client: Bot, query: CallbackQuery):
     data = query.data
@@ -759,13 +861,48 @@ async def cb_handler(client: Bot, query: CallbackQuery):
     elif data == "directory":
         await query.answer()
         markup = InlineKeyboardMarkup([
-            [sbtn("🔥 ᴛʀᴇɴᴅɪɴɢ ᴄʜᴀɴɴᴇʟs", callback_data="trending", style="success")],
+            [
+                sbtn("📚 ɪɴᴅᴇx (ᴀ-ᴢ)", callback_data="pubaz_MENU", style="primary"),
+                sbtn("🎲 ʀᴀɴᴅᴏᴍ", callback_data="pub_random", style="primary")
+            ],
             [
                 sbtn("‹ ʙᴀᴄᴋ", callback_data="start", style="primary"),
                 sbtn("✖ ᴄʟᴏsᴇ", callback_data="close", style="danger")
             ]
         ])
         await edit_ui(query.message, get_directory_text(), reply_markup=markup)
+
+    elif data.startswith("pubaz_"):
+        await query.answer()
+        if not _CHANNEL_INDEX:
+            asyncio.create_task(warmup_channel_index(client))
+        parts = data.split("_")
+        if parts[1] == "MENU":
+            return await render_public_az_menu(query.message)
+        await render_public_az_page(query.message, parts[1], int(parts[2]))
+
+    elif data == "pub_random":
+        items = get_public_az_items()
+        if not items:
+            return await query.answer("Index loading...", show_alert=True)
+        chosen = random.choice(items)
+        await query.answer(f"🎲 {chosen['title']}", show_alert=False)
+        ch_id = chosen["channel_id"]
+        is_joined, unjoined = await check_user_fsub(client, user_id)
+        code = await save_encoded_link(ch_id)
+        await save_encoded_link2(ch_id, code)
+        _, mode = await get_cached_fsub_config()
+        payload = f"req_{code}" if mode == "request" else code
+
+        if not is_joined:
+            fsub_markup = await build_fsub_keyboard(client, unjoined, payload)
+            return await edit_ui(query.message, get_fsub_text(), reply_markup=fsub_markup)
+
+        try:
+            await query.message.delete()
+        except Exception:
+            pass
+        await deliver_channel_link(client, query.message, payload)
 
     elif data == "trending":
         await query.answer()
