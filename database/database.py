@@ -13,6 +13,7 @@ channels_collection = database['channels']
 fsub_channels_collection = database['fsub_channels']
 admins_collection = database['admins']
 removed_admins_collection = database['removed_admins']
+trending_collection = database['trending_channels']
 settings_collection = database['settings']
 
 # --- MEMORY CACHE ---
@@ -72,7 +73,7 @@ async def del_user(user_id: int) -> bool:
     except Exception:
         return False
 
-# ─── FIXED ADMIN MANAGEMENT (WORKS EVEN FOR CONFIG ADMINS) ─────────────
+# ─── FIXED ADMIN MANAGEMENT ────────────────────────────────────────────
 async def is_admin(user_id: int) -> bool:
     uid = int(user_id)
     if uid == OWNER_ID:
@@ -122,7 +123,32 @@ async def list_admins() -> list:
     except Exception:
         return list(set(ADMINS + [OWNER_ID]))
 
-# ─── HIDE / UNHIDE CHANNELS FROM /get + TRENDING CLICKS ────────────────
+# ─── MANUAL TRENDING CHANNELS (/add_trend, /del_trend, /list_trend) ────
+async def add_trending_channel(channel_id: int, title: str) -> bool:
+    try:
+        await trending_collection.update_one(
+            {"channel_id": int(channel_id)},
+            {"$set": {"channel_id": int(channel_id), "title": title, "added_at": datetime.utcnow()}},
+            upsert=True
+        )
+        return True
+    except Exception:
+        return False
+
+async def remove_trending_channel(channel_id: int) -> bool:
+    try:
+        res = await trending_collection.delete_one({"channel_id": int(channel_id)})
+        return res.deleted_count > 0
+    except Exception:
+        return False
+
+async def get_trending_channels() -> List[dict]:
+    try:
+        return await trending_collection.find({}).sort("added_at", -1).to_list(None)
+    except Exception:
+        return []
+
+# ─── HIDE / UNHIDE CHANNELS FROM /get ──────────────────────────────────
 async def set_channel_hidden(channel_id: int, hidden: bool = True) -> bool:
     try:
         await channels_collection.update_one(
@@ -149,18 +175,6 @@ async def increment_channel_clicks(channel_id: int):
         )
     except Exception:
         pass
-
-async def get_top_channels(limit: int = 5) -> List[dict]:
-    try:
-        cursor = channels_collection.find({
-            "status": "active",
-            "hidden_from_get": {"$ne": True},
-            "original_link": {"$exists": False},
-            "title": {"$exists": True}
-        }).sort("clicks", -1).limit(limit)
-        return await cursor.to_list(length=limit)
-    except Exception:
-        return []
 
 # ─── FSUB MODE & CHANNELS ──────────────────────────────────────────────
 async def get_fsub_mode() -> str:
