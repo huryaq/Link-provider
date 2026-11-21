@@ -13,7 +13,7 @@ from database.database import (
     save_encoded_link, save_encoded_link2, channels_collection,
     set_channel_hidden, get_hidden_channels, is_admin
 )
-from plugins.helpers import sbtn, reply_ui, edit_ui, normalize_text
+from plugins.helpers import sbtn, reply_ui, edit_ui, normalize_text, to_small_caps
 
 PAGE_SIZE = 6
 LINKS_PER_PAGE = 10
@@ -159,7 +159,7 @@ async def hide_channel_cmd(client: Bot, message: Message):
         f"<blockquote><b>「 ➲ 𝗖𝗛𝗔𝗡𝗡𝗘𝗟 𝗛𝗜𝗗𝗗𝗘𝗡 🙈 」</b></blockquote>\n"
         f"<blockquote><b>▸ {html.escape(title)}</b>\n"
         f"<b>◍ ɪᴅ:</b> <code>{channel_id}</code>\n\n"
-        f"<b>╰┈➤ <i>ʜɪᴅᴅᴇɴ ғʀᴏᴍ /get. ᴀʟʟ ɪɴᴠɪᴛᴇ ʟɪɴᴋs ʀᴇᴍᴀɪɴ ᴀᴄᴛɪᴠᴇ!</i></b></blockquote>",
+        f"<b>╰┈➤ <i>ʜɪᴅᴅᴇɴ ғʀᴏᴍ /get &amp; ɪɴᴅᴇx. ᴀʟʟ ɪɴᴠɪᴛᴇ ʟɪɴᴋs ʀᴇᴍᴀɪɴ ᴀᴄᴛɪᴠᴇ!</i></b></blockquote>",
         reply_markup=close_btn
     )
 
@@ -196,7 +196,7 @@ async def unhide_channel_cmd(client: Bot, message: Message):
         f"<blockquote><b>「 ➲ 𝗖𝗛𝗔𝗡𝗡𝗘𝗟 𝗩𝗜𝗦𝗜𝗕𝗟𝗘 ⚡ 」</b></blockquote>\n"
         f"<blockquote><b>▸ {html.escape(title)}</b>\n"
         f"<b>◍ ɪᴅ:</b> <code>{channel_id}</code>\n\n"
-        f"<b>╰┈➤ <i>ɴᴏᴡ ᴠɪsɪʙʟᴇ ɪɴ /get sᴇᴀʀᴄʜ!</i></b></blockquote>",
+        f"<b>╰┈➤ <i>ɴᴏᴡ ᴠɪsɪʙʟᴇ ɪɴ /get &amp; ɪɴᴅᴇx!</i></b></blockquote>",
         reply_markup=close_btn
     )
 
@@ -297,7 +297,7 @@ async def search_channel_cmd(client: Bot, message: Message):
         auto_delete_sec=120
     )
 
-# ─── SMART A-Z /links DIRECTORY + DIRECT FILTER + .TXT EXPORT ──────────
+# ─── SMART A-Z /links DIRECTORY (CLEAN SMALL-CAPS A B C BUTTONS) ───────
 async def render_links_az_menu(client: Bot, message, edit: bool = False):
     items = await get_all_channels_sorted_az(client)
     close_btn = InlineKeyboardMarkup([[sbtn("✖ ᴄʟᴏsᴇ", callback_data="close", style="danger")]])
@@ -308,28 +308,23 @@ async def render_links_az_menu(client: Bot, message, edit: bool = False):
         )
         return await (edit_ui(message, txt, close_btn) if edit else reply_ui(message, txt, close_btn))
 
-    # Count channels per starting letter
-    counts = {}
-    for it in items:
-        ltr = it["letter"]
-        counts[ltr] = counts.get(ltr, 0) + 1
-
-    sorted_letters = sorted([k for k in counts.keys() if k != "#"])
-    if "#" in counts:
+    present_letters = {it["letter"] for it in items}
+    sorted_letters = sorted([k for k in present_letters if k != "#"])
+    if "#" in present_letters:
         sorted_letters.append("#")
 
     buttons = []
     row = []
     for ltr in sorted_letters:
-        row.append(sbtn(f"{ltr} ({counts[ltr]})", callback_data=f"linksaz_{ltr}_0", style="primary"))
-        if len(row) == 4:
+        row.append(sbtn(f"{to_small_caps(ltr)}", callback_data=f"linksaz_{ltr}_0", style="primary"))
+        if len(row) == 6:
             buttons.append(row)
             row = []
     if row:
         buttons.append(row)
 
     buttons.append([
-        sbtn(f"⚡ ᴀʟʟ A-Z ({len(items)})", callback_data="linksaz_ALL_0", style="success"),
+        sbtn("◈ ᴀʟʟ", callback_data="linksaz_ALL_0", style="primary"),
         sbtn("📄 ᴇxᴘᴏʀᴛ .ᴛxᴛ", callback_data="linksexport", style="success")
     ])
     buttons.append([sbtn("✖ ᴄʟᴏsᴇ", callback_data="close", style="danger")])
@@ -352,7 +347,7 @@ async def render_links_filtered_page(client: Bot, message, items: list, label: s
     start_idx = page * LINKS_PER_PAGE
     end_idx = start_idx + LINKS_PER_PAGE
 
-    header = f"<blockquote><b>「 ➲ 𝗟𝗜𝗡𝗞𝗦 • {label} ({len(items)}) 」</b></blockquote>\n"
+    header = f"<blockquote><b>「 ➲ 𝗟𝗜𝗡𝗞𝗦 • {to_small_caps(label)} ({len(items)}) 」</b></blockquote>\n"
     body = "<blockquote expandable>"
     for i, it in enumerate(items[start_idx:end_idx], start=start_idx + 1):
         hid = " 🙈" if it["hidden"] else ""
@@ -370,7 +365,7 @@ async def render_links_filtered_page(client: Bot, message, items: list, label: s
     nav = []
     if page > 0:
         nav.append(sbtn("‹ ᴘʀᴇᴠ", callback_data=f"linksaz_{cb_key}_{page-1}", style="primary"))
-    nav.append(sbtn("🔤 A-Z ᴍᴇɴᴜ", callback_data="linksaz_MENU", style="success"))
+    nav.append(sbtn("📚 ᴀ-ᴢ ᴍᴇɴᴜ", callback_data="linksaz_MENU", style="primary"))
     if page < total_pages - 1:
         nav.append(sbtn("ɴᴇxᴛ ›", callback_data=f"linksaz_{cb_key}_{page+1}", style="primary"))
     buttons.append(nav)
@@ -388,7 +383,6 @@ async def show_links(client: Bot, message: Message):
     if not await is_admin(message.from_user.id):
         return
 
-    # If admin typed /links <letter or keyword>
     if len(message.command) >= 2:
         raw_q = " ".join(message.command[1:]).strip()
         q_norm = normalize_text(raw_q)
@@ -398,14 +392,14 @@ async def show_links(client: Bot, message: Message):
             ltr = q_norm.upper()
             filtered = [it for it in items if it["letter"] == ltr]
             if not filtered:
-                close_btn = InlineKeyboardMarkup([[sbtn("🔤 A-Z ᴍᴇɴᴜ", callback_data="linksaz_MENU", style="primary"), sbtn("✖ ᴄʟᴏsᴇ", callback_data="close", style="danger")]])
+                close_btn = InlineKeyboardMarkup([[sbtn("📚 ᴀ-ᴢ ᴍᴇɴᴜ", callback_data="linksaz_MENU", style="primary"), sbtn("✖ ᴄʟᴏsᴇ", callback_data="close", style="danger")]])
                 return await reply_ui(message, f"<blockquote><b>「 ❌ 𝗡𝗢 𝗖𝗛𝗔𝗡𝗡𝗘𝗟𝗦 𝗨𝗡𝗗𝗘𝗥 {ltr} 」</b></blockquote>", reply_markup=close_btn)
             return await render_links_filtered_page(client, message, filtered, ltr, ltr, page=0, edit=False)
 
         q_nospace = q_norm.replace(" ", "")
         filtered = [it for it in items if q_norm in it["norm"] or q_nospace in it["nospace"]]
         if not filtered:
-            close_btn = InlineKeyboardMarkup([[sbtn("🔤 A-Z ᴍᴇɴᴜ", callback_data="linksaz_MENU", style="primary"), sbtn("✖ ᴄʟᴏsᴇ", callback_data="close", style="danger")]])
+            close_btn = InlineKeyboardMarkup([[sbtn("📚 ᴀ-ᴢ ᴍᴇɴᴜ", callback_data="linksaz_MENU", style="primary"), sbtn("✖ ᴄʟᴏsᴇ", callback_data="close", style="danger")]])
             return await reply_ui(
                 message,
                 f"<blockquote><b>「 ❌ 𝗡𝗢 𝗠𝗔𝗧𝗖𝗛 」</b></blockquote>\n"
@@ -414,7 +408,6 @@ async def show_links(client: Bot, message: Message):
             )
         return await render_links_filtered_page(client, message, filtered, raw_q.upper(), "ALL", page=0, edit=False)
 
-    # Default /links -> Show compact A-Z Grid
     await render_links_az_menu(client, message, edit=False)
 
 @Bot.on_callback_query(filters.regex(r"^linksaz_"))
